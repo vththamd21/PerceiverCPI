@@ -9,7 +9,7 @@ from chemprop.rdkit import make_mol
 MAX_ATOMIC_NUM = 100
 ATOM_FEATURES = {
     'atomic_num': list(range(MAX_ATOMIC_NUM)),
-    #'degree': [0, 1, 2, 3, 4, 5],
+    'degree': [0, 1, 2, 3, 4, 5],
     #'formal_charge': [-1, -2, 1, 2, 0],
     'chiral_tag': [0, 1, 2, 3],
     #'num_Hs': [0, 1, 2, 3, 4],
