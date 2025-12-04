@@ -11,5 +11,5 @@ RDLogger.DisableLog('rdApp.*')
 warnings.filterwarnings("ignore")
 
 
-if _name_ == '_main_':
+if __name__ == '__main__':
     chemprop_train()
