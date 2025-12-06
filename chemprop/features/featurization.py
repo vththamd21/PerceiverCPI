@@ -8,7 +8,7 @@ from chemprop.rdkit import make_mol
 # Atom feature sizes
 MAX_ATOMIC_NUM = 100
 ATOM_FEATURES = {
-    'atomic_num': list(range(MAX_ATOMIC_NUM)),
+    #'atomic_num': list(range(MAX_ATOMIC_NUM)),
     'degree': [0, 1, 2, 3, 4, 5],
     #'formal_charge': [-1, -2, 1, 2, 0],
     #'chiral_tag': [0, 1, 2, 3],
@@ -150,8 +150,7 @@ def atom_features(atom: Chem.rdchem.Atom, functional_groups: List[int] = None) -
     if atom is None:
         features = [0] * ATOM_FDIM
     else:
-        features = onek_encoding_unk(atom.GetAtomicNum() - 1, ATOM_FEATURES['atomic_num']) + \
-            onek_encoding_unk(atom.GetTotalDegree(), ATOM_FEATURES['degree']) + \
+        features = onek_encoding_unk(atom.GetTotalDegree(), ATOM_FEATURES['degree']) + \
             onek_encoding_unk(int(atom.GetTotalNumHs()), ATOM_FEATURES['num_Hs']) + \
             onek_encoding_unk(int(atom.GetHybridization()), ATOM_FEATURES['hybridization']) + \
             [1 if atom.GetIsAromatic() else 0] + \
