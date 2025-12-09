@@ -14,11 +14,11 @@ ATOM_FEATURES = {
     'chiral_tag': [0, 1, 2, 3],
     #'num_Hs': [0, 1, 2, 3, 4],
     'hybridization': [
-        #Chem.rdchem.HybridizationType.SP,
-        #Chem.rdchem.HybridizationType.SP2,
-        #Chem.rdchem.HybridizationType.SP3,
-        #Chem.rdchem.HybridizationType.SP3D,
-        #Chem.rdchem.HybridizationType.SP3D2
+        Chem.rdchem.HybridizationType.SP,
+        Chem.rdchem.HybridizationType.SP2,
+        Chem.rdchem.HybridizationType.SP3,
+        Chem.rdchem.HybridizationType.SP3D,
+        Chem.rdchem.HybridizationType.SP3D2
     ],
 }
 
