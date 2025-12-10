@@ -150,7 +150,7 @@ def atom_features(atom: Chem.rdchem.Atom, functional_groups: List[int] = None) -
     if atom is None:
         features = [0] * ATOM_FDIM
     else:
-        features =. onek_encoding_unk(atom.GetAtomicNum() - 1, ATOM_FEATURES['atomic_num']) + \
+        features = onek_encoding_unk(atom.GetAtomicNum() - 1, ATOM_FEATURES['atomic_num']) + \
             onek_encoding_unk(atom.GetTotalDegree(), ATOM_FEATURES['degree']) + \
             onek_encoding_unk(int(atom.GetTotalNumHs()), ATOM_FEATURES['num_Hs']) + \
             [1 if atom.GetIsAromatic() else 0] + \
