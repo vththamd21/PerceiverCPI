@@ -4,7 +4,26 @@ from rdkit import Chem
 import torch
 import numpy as np
 from chemprop.rdkit import make_mol
-
+MAX_BOND_HYBRIDIZATION = {
+    "SP3D2": 6,
+    "SP3D": 5,
+    "SP3": 4,
+    "SP2": 3,
+    "SP": 2,
+    "S": 1,
+}
+HYBRIDIZATION_DICT = {
+    (1, 0): [1, 0, 0, 1, 0], (0, 0): [1, 0, 0, 0, 0], (0, 1): [1, 0, 0, 0, 1],
+    (1, 1): [1, 1, 0, 1, 1], (2, 0): [1, 1, 0, 2, 0], (0, 2): [1, 1, 0, 0, 2],
+    (2, 1): [1, 2, 0, 2, 1], (1, 2): [1, 2, 0, 1, 2], (3, 0): [1, 2, 0, 3, 0],
+    (0, 3): [1, 2, 0, 0, 3], (1, 3): [1, 3, 0, 1, 3], (2, 2): [1, 3, 0, 2, 2],
+    (3, 1): [1, 3, 0, 3, 1], (4, 0): [1, 3, 0, 4, 0], (0, 4): [1, 3, 0, 0, 4],
+    (6, -2): [1, 3, 0, 6, 0], (2, 3): [1, 3, 1, 2, 3], (3, 2): [1, 3, 1, 3, 2],
+    (4, 1): [1, 3, 1, 4, 1], (5, 0): [1, 3, 1, 5, 0], (0, 5): [1, 3, 1, 0, 5],
+    (6, -1): [1, 3, 1, 6, 0], (4, 2): [1, 3, 2, 4, 2], (2, 4): [1, 3, 2, 2, 4],
+    (3, 3): [1, 3, 2, 3, 3], (5, 1): [1, 3, 2, 5, 1], (1, 5): [1, 3, 2, 1, 5],
+    (6, 0): [1, 3, 2, 6, 0],
+}
 # Atom feature sizes
 MAX_ATOMIC_NUM = 100
 ATOM_FEATURES = {
@@ -13,13 +32,13 @@ ATOM_FEATURES = {
     'formal_charge': [-1, -2, 1, 2, 0],
     'chiral_tag': [0, 1, 2, 3],
     'num_Hs': [0, 1, 2, 3, 4],
-    'hybridization': [
-        Chem.rdchem.HybridizationType.SP,
-        Chem.rdchem.HybridizationType.SP2,
-        Chem.rdchem.HybridizationType.SP3,
-        Chem.rdchem.HybridizationType.SP3D,
-        Chem.rdchem.HybridizationType.SP3D2
-    ],
+    #'hybridization': [
+        #Chem.rdchem.HybridizationType.SP,
+        #Chem.rdchem.HybridizationType.SP2,
+        #Chem.rdchem.HybridizationType.SP3,
+        #Chem.rdchem.HybridizationType.SP3D,
+        #Chem.rdchem.HybridizationType.SP3D2
+    #],
 }
 
 # Distance feature sizes
@@ -29,7 +48,7 @@ THREE_D_DISTANCE_STEP = 1
 THREE_D_DISTANCE_BINS = list(range(0, THREE_D_DISTANCE_MAX + 1, THREE_D_DISTANCE_STEP))
 
 # len(choices) + 1 to include room for uncommon values; + 2 at end for IsAromatic and mass
-ATOM_FDIM = sum(len(choices) + 1 for choices in ATOM_FEATURES.values()) + 2
+ATOM_FDIM = sum(len(choices) + 1 for choices in ATOM_FEATURES.values()) + 2 + 5
 EXTRA_ATOM_FDIM = 0
 BOND_FDIM = 14
 EXTRA_BOND_FDIM = 0
@@ -138,6 +157,25 @@ def onek_encoding_unk(value: int, choices: List[int]) -> List[int]:
 
     return encoding
 
+def get_kgg_hybridization_features(atom: Chem.rdchem.Atom) -> List[int]:
+    """
+    Tính toán vector đặc trưng lai hóa 5 chiều theo phong cách KGG.
+    """
+    # 1. Lấy tên lai hóa (ví dụ: SP3, SP2)
+    hyb_type = str(atom.GetHybridization())
+    
+    # 2. Tính tổng liên kết Sigma (Degree + số H)
+    total_sigma = atom.GetDegree() + atom.GetTotalNumHs()
+    
+    # 3. Lấy số liên kết tối đa theo lý thuyết
+    max_bonds = MAX_BOND_HYBRIDIZATION.get(hyb_type, 0)
+    
+    # 4. Tính số cặp e tự do (Logic cốt lõi của KGG)
+    num_lone_pairs = max_bonds - total_sigma
+    
+    # 5. Tra cứu vector đặc trưng
+    # Trả về [0,0,0,0,0] nếu không tìm thấy key
+    return HYBRIDIZATION_DICT.get((total_sigma, num_lone_pairs), [0, 0, 0, 0, 0])
 
 def atom_features(atom: Chem.rdchem.Atom, functional_groups: List[int] = None) -> List[Union[bool, int, float]]:
     """
@@ -155,9 +193,10 @@ def atom_features(atom: Chem.rdchem.Atom, functional_groups: List[int] = None) -
             onek_encoding_unk(atom.GetFormalCharge(), ATOM_FEATURES['formal_charge']) + \
             onek_encoding_unk(int(atom.GetChiralTag()), ATOM_FEATURES['chiral_tag']) + \
             onek_encoding_unk(int(atom.GetTotalNumHs()), ATOM_FEATURES['num_Hs']) + \
-            onek_encoding_unk(int(atom.GetHybridization()), ATOM_FEATURES['hybridization']) + \
             [1 if atom.GetIsAromatic() else 0] + \
             [atom.GetMass() * 0.01]  # scaled to about the same range as other features
+        kgg_hyb_feats = get_kgg_hybridization_features(atom)
+        features += kgg_hyb_feats
         if functional_groups is not None:
             features += functional_groups
     return features
