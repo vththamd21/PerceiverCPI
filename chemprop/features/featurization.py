@@ -159,22 +159,12 @@ def onek_encoding_unk(value: int, choices: List[int]) -> List[int]:
 
 def get_kgg_hybridization_features(atom: Chem.rdchem.Atom) -> List[int]:
     """
-    Tính toán vector đặc trưng lai hóa 5 chiều theo phong cách KGG.
+    Tính toán vector đặc trưng lai hóa 5 chiều theo KGG.
     """
-    # 1. Lấy tên lai hóa (ví dụ: SP3, SP2)
     hyb_type = str(atom.GetHybridization())
-    
-    # 2. Tính tổng liên kết Sigma (Degree + số H)
     total_sigma = atom.GetDegree() + atom.GetTotalNumHs()
-    
-    # 3. Lấy số liên kết tối đa theo lý thuyết
     max_bonds = MAX_BOND_HYBRIDIZATION.get(hyb_type, 0)
-    
-    # 4. Tính số cặp e tự do (Logic cốt lõi của KGG)
     num_lone_pairs = max_bonds - total_sigma
-    
-    # 5. Tra cứu vector đặc trưng
-    # Trả về [0,0,0,0,0] nếu không tìm thấy key
     return HYBRIDIZATION_DICT.get((total_sigma, num_lone_pairs), [0, 0, 0, 0, 0])
 
 def atom_features(atom: Chem.rdchem.Atom, functional_groups: List[int] = None) -> List[Union[bool, int, float]]:
