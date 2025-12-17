@@ -24,6 +24,13 @@ HYBRIDIZATION_DICT = {
     (3, 3): [1, 3, 2, 3, 3], (5, 1): [1, 3, 2, 5, 1], (1, 5): [1, 3, 2, 1, 5],
     (6, 0): [1, 3, 2, 6, 0],
 }
+KGG_FEATURES = {
+    'orbital_s': [0, 1],                # Thường là 1
+    'orbital_p': [0, 1, 2, 3],          # Orbital p từ 0-3
+    'orbital_d': [0, 1, 2],             # Orbital d từ 0-2
+    'neighbors': [0, 1, 2, 3, 4, 5, 6], # Số lượng láng giềng (max là 6 trong dict)
+    'lone_pairs': [0, 1, 2, 3, 4, 5]    # Số cặp e tự do (max là 5 trong dict)
+}
 # Atom feature sizes
 MAX_ATOMIC_NUM = 100
 ATOM_FEATURES = {
@@ -47,8 +54,11 @@ THREE_D_DISTANCE_MAX = 20
 THREE_D_DISTANCE_STEP = 1
 THREE_D_DISTANCE_BINS = list(range(0, THREE_D_DISTANCE_MAX + 1, THREE_D_DISTANCE_STEP))
 
+# Tính tổng số chiều của các vector one-hot KGG
+KGG_FDIM = sum(len(choices) + 1 for choices in KGG_FEATURES.values())
+
 # len(choices) + 1 to include room for uncommon values; + 2 at end for IsAromatic and mass
-ATOM_FDIM = sum(len(choices) + 1 for choices in ATOM_FEATURES.values()) + 2 + 5
+ATOM_FDIM = sum(len(choices) + 1 for choices in ATOM_FEATURES.values()) + 2 + KGG_FDIM
 EXTRA_ATOM_FDIM = 0
 BOND_FDIM = 14
 EXTRA_BOND_FDIM = 0
@@ -159,13 +169,30 @@ def onek_encoding_unk(value: int, choices: List[int]) -> List[int]:
 
 def get_kgg_hybridization_features(atom: Chem.rdchem.Atom) -> List[int]:
     """
-    Tính toán vector đặc trưng lai hóa 5 chiều theo KGG.
+    Tính toán vector đặc trưng lai hóa 5 chiều theo KGG và chuyển sang One-Hot Encoding.
     """
     hyb_type = str(atom.GetHybridization())
     total_sigma = atom.GetDegree() + atom.GetTotalNumHs()
     max_bonds = MAX_BOND_HYBRIDIZATION.get(hyb_type, 0)
+    
+    # Logic KGG: Tính số cặp e tự do
     num_lone_pairs = max_bonds - total_sigma
-    return HYBRIDIZATION_DICT.get((total_sigma, num_lone_pairs), [0, 0, 0, 0, 0])
+    
+    # Lấy vector thô [s, p, d, neighbors, lone_pairs] từ dict
+    # Ví dụ: [1, 3, 0, 4, 0]
+    raw_vec = HYBRIDIZATION_DICT.get((total_sigma, num_lone_pairs), [0, 0, 0, 0, 0])
+    s, p, d, n, lp = raw_vec
+    
+    # --- CHUYỂN ĐỔI SANG ONE-HOT ---
+    # Sử dụng hàm onek_encoding_unk có sẵn của chemprop
+    features = []
+    features += onek_encoding_unk(s, KGG_FEATURES['orbital_s'])
+    features += onek_encoding_unk(p, KGG_FEATURES['orbital_p'])
+    features += onek_encoding_unk(d, KGG_FEATURES['orbital_d'])
+    features += onek_encoding_unk(n, KGG_FEATURES['neighbors'])
+    features += onek_encoding_unk(lp, KGG_FEATURES['lone_pairs'])
+    
+    return features
 
 def atom_features(atom: Chem.rdchem.Atom, functional_groups: List[int] = None) -> List[Union[bool, int, float]]:
     """
