@@ -1,9 +1,20 @@
+import os
+from rdkit import RDConfig, Chem
+from rdkit.Chem import ChemicalFeatures
 from typing import List, Tuple, Union
 from itertools import zip_longest
 from rdkit import Chem
 import torch
 import numpy as np
 from chemprop.rdkit import make_mol
+
+fdef_name = os.path.join(RDConfig.RDDataDir, 'BaseFeatures.fdef')
+try:
+    CHEM_FEATURE_FACTORY = ChemicalFeatures.BuildFeatureFactory(fdef_name)
+except:
+    print("Warning: Không tìm thấy BaseFeatures.fdef. Tính năng Donor/Acceptor sẽ mặc định là 0.")
+    CHEM_FEATURE_FACTORY = None
+
 MAX_BOND_HYBRIDIZATION = {
     "SP3D2": 6,
     "SP3D": 5,
@@ -58,7 +69,7 @@ THREE_D_DISTANCE_BINS = list(range(0, THREE_D_DISTANCE_MAX + 1, THREE_D_DISTANCE
 KGG_FDIM = sum(len(choices) + 1 for choices in KGG_FEATURES.values())
 
 # len(choices) + 1 to include room for uncommon values; + 2 at end for IsAromatic and mass
-ATOM_FDIM = sum(len(choices) + 1 for choices in ATOM_FEATURES.values()) + 2 + KGG_FDIM
+ATOM_FDIM = sum(len(choices) + 1 for choices in ATOM_FEATURES.values()) + 2 + KGG_FDIM + 10
 EXTRA_ATOM_FDIM = 0
 BOND_FDIM = 14
 EXTRA_BOND_FDIM = 0
@@ -192,6 +203,44 @@ def get_kgg_hybridization_features(atom: Chem.rdchem.Atom) -> List[int]:
     features += onek_encoding_unk(n, KGG_FEATURES['neighbors'])
     features += onek_encoding_unk(lp, KGG_FEATURES['lone_pairs'])
     
+    return features
+
+def get_syncat_features(atom: Chem.rdchem.Atom) -> List[int]:
+    """
+    SynCat Features: D/A, Rings, Chirality
+    """
+    # 1. Donor/Acceptor
+    features = []
+    is_donor = 0
+    is_acceptor = 0
+    if CHEM_FEATURE_FACTORY is not None:
+        mol = atom.GetOwningMol()
+        idx = atom.GetIdx()
+        
+        feats = CHEM_FEATURE_FACTORY.GetFeaturesForMol(mol)
+        for f in feats:
+            if f.GetAtomIds()[0] == idx: 
+                if f.GetFamily() == 'Donor':
+                    is_donor = 1
+                elif f.GetFamily() == 'Acceptor':
+                    is_acceptor = 1
+    features += [is_donor, is_acceptor]
+    # 2. Ring Sizes
+    ringsize_list = [3, 4, 5, 6, 7, 8]
+    features += [1 if atom.IsInRingSize(s) else 0 for s in ringsize_list]
+    # 3. Chirality
+    c_list = [0, 0]
+    if atom.HasProp("Chirality"):
+        prop = atom.GetProp("Chirality")
+        c_list = [1 if prop == "Tet_CW" else 0, 1 if prop == "Tet_CCW" else 0]
+
+    elif atom.GetChiralTag() != Chem.rdchem.ChiralType.CHI_UNSPECIFIED:
+        if atom.GetChiralTag() == Chem.rdchem.ChiralType.CHI_TETRAHEDRAL_CW:
+            c_list = [1, 0]
+        elif atom.GetChiralTag() == Chem.rdchem.ChiralType.CHI_TETRAHEDRAL_CCW:
+            c_list = [0, 1]
+    features += c_list
+
     return features
 
 def atom_features(atom: Chem.rdchem.Atom, functional_groups: List[int] = None) -> List[Union[bool, int, float]]:
