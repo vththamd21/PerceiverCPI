@@ -261,7 +261,9 @@ def atom_features(atom: Chem.rdchem.Atom, functional_groups: List[int] = None) -
             onek_encoding_unk(int(atom.GetTotalNumHs()), ATOM_FEATURES['num_Hs']) + \
             [1 if atom.GetIsAromatic() else 0] + \
             [atom.GetMass() * 0.01]  # scaled to about the same range as other features
+        
         kgg_hyb_feats = get_kgg_hybridization_features(atom)
+        features += get_syncat_features(atom) 
         features += kgg_hyb_feats
         if functional_groups is not None:
             features += functional_groups
