@@ -205,43 +205,48 @@ def get_kgg_hybridization_features(atom: Chem.rdchem.Atom) -> List[int]:
     
     return features
 
-def get_syncat_features(atom: Chem.rdchem.Atom) -> List[int]:
+def get_syncat_atom_features_batch(mol: Chem.Mol) -> List[List[int]]:
     """
-    SynCat Features: D/A, Rings, Chirality
+    Tính toán features SynCat cho TOÀN BỘ phân tử một lần duy nhất.
+    Trả về: List các feature vector tương ứng với từng atom theo thứ tự index.
     """
-    # 1. Donor/Acceptor
-    features = []
-    is_donor = 0
-    is_acceptor = 0
-    if CHEM_FEATURE_FACTORY is not None:
-        mol = atom.GetOwningMol()
-        idx = atom.GetIdx()
-        
+    n_atoms = mol.GetNumAtoms()
+    # Khởi tạo ma trận features: [n_atoms, 10]
+    # 10 dims = 2 (D/A) + 6 (Rings) + 2 (Chirality)
+    features_batch = [[0] * 10 for _ in range(n_atoms)]
+    
+    # 1. Donor/Acceptor (Phần nặng nhất - Chỉ chạy 1 lần)
+    if CHEM_FEATURE_FACTORY:
         feats = CHEM_FEATURE_FACTORY.GetFeaturesForMol(mol)
         for f in feats:
-            if f.GetAtomIds()[0] == idx: 
-                if f.GetFamily() == 'Donor':
-                    is_donor = 1
-                elif f.GetFamily() == 'Acceptor':
-                    is_acceptor = 1
-    features += [is_donor, is_acceptor]
-    # 2. Ring Sizes
+            family = f.GetFamily()
+            if family in ['Donor', 'Acceptor']:
+                # Một feature có thể thuộc về 1 hoặc nhiều atom
+                for atom_idx in f.GetAtomIds():
+                    if atom_idx < n_atoms:
+                        if family == 'Donor':
+                            features_batch[atom_idx][0] = 1
+                        elif family == 'Acceptor':
+                            features_batch[atom_idx][1] = 1
+
+    # 2. Ring Sizes & Chirality (Phần nhẹ - Duyệt qua từng atom)
     ringsize_list = [3, 4, 5, 6, 7, 8]
-    features += [1 if atom.IsInRingSize(s) else 0 for s in ringsize_list]
-    # 3. Chirality
-    c_list = [0, 0]
-    if atom.HasProp("Chirality"):
-        prop = atom.GetProp("Chirality")
-        c_list = [1 if prop == "Tet_CW" else 0, 1 if prop == "Tet_CCW" else 0]
+    for atom in mol.GetAtoms():
+        idx = atom.GetIdx()
+        
+        # Check Ring Sizes (Indices 2-7)
+        for i, size in enumerate(ringsize_list):
+            if atom.IsInRingSize(size):
+                features_batch[idx][2 + i] = 1
+                
+        # Check Chirality (Indices 8-9)
+        tag = atom.GetChiralTag()
+        if tag == Chem.rdchem.ChiralType.CHI_TETRAHEDRAL_CW:
+            features_batch[idx][8] = 1
+        elif tag == Chem.rdchem.ChiralType.CHI_TETRAHEDRAL_CCW:
+            features_batch[idx][9] = 1
 
-    elif atom.GetChiralTag() != Chem.rdchem.ChiralType.CHI_UNSPECIFIED:
-        if atom.GetChiralTag() == Chem.rdchem.ChiralType.CHI_TETRAHEDRAL_CW:
-            c_list = [1, 0]
-        elif atom.GetChiralTag() == Chem.rdchem.ChiralType.CHI_TETRAHEDRAL_CCW:
-            c_list = [0, 1]
-    features += c_list
-
-    return features
+    return features_batch
 
 def atom_features(atom: Chem.rdchem.Atom, functional_groups: List[int] = None) -> List[Union[bool, int, float]]:
     """
@@ -263,7 +268,7 @@ def atom_features(atom: Chem.rdchem.Atom, functional_groups: List[int] = None) -
             [atom.GetMass() * 0.01]  # scaled to about the same range as other features
         
         kgg_hyb_feats = get_kgg_hybridization_features(atom)
-        features += get_syncat_features(atom) 
+        
         features += kgg_hyb_feats
         if functional_groups is not None:
             features += functional_groups
@@ -378,8 +383,11 @@ class MolGraph:
         self.overwrite_default_bond_features = overwrite_default_bond_features
 
         if not self.is_reaction:
-            # Get atom features
-            self.f_atoms = [atom_features(atom) for atom in mol.GetAtoms()]
+            base_features = [atom_features(atom) for atom in mol.GetAtoms()]
+            syncat_features = get_syncat_atom_features_batch(mol)
+            
+            self.f_atoms = [b + s for b, s in zip(base_features, syncat_features)]
+     
             if atom_features_extra is not None:
                 if overwrite_default_atom_features:
                     self.f_atoms = [descs.tolist() for descs in atom_features_extra]
