@@ -36,8 +36,6 @@ class AttentionBlock(nn.Module):
         :Query : A projection function
         :Key : A projection function
         :Value : A projection function
-        Cross-Att: Key and Value should always come from the same source (Aiming to forcus on), Query comes from the other source
-        Self-Att : Both three Query, Key, Value come from the same source (For refining purpose)
         """
 
         batch_size = query.shape[0]
@@ -77,15 +75,15 @@ class CrossAttentionBlock(nn.Module):
         super(CrossAttentionBlock, self).__init__()
         self.att = AttentionBlock(hid_dim = args.hidden_size, n_heads = 1, dropout=args.dropout)
 
-    
-    def forward(self,graph_feature,morgan_feature,sequence_feature):
+    # --- SỬA Ở ĐÂY: Bỏ tham số morgan_feature ---
+    def forward(self, graph_feature, sequence_feature):
         """
             :graph_feature : A batch of 1D tensor for representing the Graph information from compound
-            :morgan_feature: A batch of 1D tensor for representing the ECFP information from compound
             :sequence_feature: A batch of 1D tensor for representing the information from protein sequence
         """
-        # cross attention for compound information enrichment
-        graph_feature = graph_feature + self.att(morgan_feature,graph_feature,graph_feature)
+        # cross attention for compound information enrichment -> ĐÃ BỎ (Graph + Morgan)
+        # graph_feature = graph_feature + self.att(morgan_feature,graph_feature,graph_feature)
+        
         # self-attention
         graph_feature = self.att(graph_feature,graph_feature,graph_feature)
         # cross-attention for interaction
