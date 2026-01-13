@@ -1,6 +1,3 @@
-import os
-from rdkit import RDConfig, Chem
-from rdkit.Chem import ChemicalFeatures
 from typing import List, Tuple, Union
 from itertools import zip_longest
 from rdkit import Chem
@@ -8,55 +5,21 @@ import torch
 import numpy as np
 from chemprop.rdkit import make_mol
 
-fdef_name = os.path.join(RDConfig.RDDataDir, 'BaseFeatures.fdef')
-try:
-    CHEM_FEATURE_FACTORY = ChemicalFeatures.BuildFeatureFactory(fdef_name)
-except:
-    print("Warning: Không tìm thấy BaseFeatures.fdef. Tính năng Donor/Acceptor sẽ mặc định là 0.")
-    CHEM_FEATURE_FACTORY = None
-
-MAX_BOND_HYBRIDIZATION = {
-    "SP3D2": 6,
-    "SP3D": 5,
-    "SP3": 4,
-    "SP2": 3,
-    "SP": 2,
-    "S": 1,
-}
-HYBRIDIZATION_DICT = {
-    (1, 0): [1, 0, 0, 1, 0], (0, 0): [1, 0, 0, 0, 0], (0, 1): [1, 0, 0, 0, 1],
-    (1, 1): [1, 1, 0, 1, 1], (2, 0): [1, 1, 0, 2, 0], (0, 2): [1, 1, 0, 0, 2],
-    (2, 1): [1, 2, 0, 2, 1], (1, 2): [1, 2, 0, 1, 2], (3, 0): [1, 2, 0, 3, 0],
-    (0, 3): [1, 2, 0, 0, 3], (1, 3): [1, 3, 0, 1, 3], (2, 2): [1, 3, 0, 2, 2],
-    (3, 1): [1, 3, 0, 3, 1], (4, 0): [1, 3, 0, 4, 0], (0, 4): [1, 3, 0, 0, 4],
-    (6, -2): [1, 3, 0, 6, 0], (2, 3): [1, 3, 1, 2, 3], (3, 2): [1, 3, 1, 3, 2],
-    (4, 1): [1, 3, 1, 4, 1], (5, 0): [1, 3, 1, 5, 0], (0, 5): [1, 3, 1, 0, 5],
-    (6, -1): [1, 3, 1, 6, 0], (4, 2): [1, 3, 2, 4, 2], (2, 4): [1, 3, 2, 2, 4],
-    (3, 3): [1, 3, 2, 3, 3], (5, 1): [1, 3, 2, 5, 1], (1, 5): [1, 3, 2, 1, 5],
-    (6, 0): [1, 3, 2, 6, 0],
-}
-KGG_FEATURES = {
-    'orbital_s': [0, 1],                # Thường là 1
-    'orbital_p': [0, 1, 2, 3],          # Orbital p từ 0-3
-    'orbital_d': [0, 1, 2],             # Orbital d từ 0-2
-    'neighbors': [0, 1, 2, 3, 4, 5, 6], # Số lượng láng giềng (max là 6 trong dict)
-    'lone_pairs': [0, 1, 2, 3, 4, 5]    # Số cặp e tự do (max là 5 trong dict)
-}
 # Atom feature sizes
 MAX_ATOMIC_NUM = 100
 ATOM_FEATURES = {
     'atomic_num': list(range(MAX_ATOMIC_NUM)),
     'degree': [0, 1, 2, 3, 4, 5],
-    #'formal_charge': [-1, -2, 1, 2, 0],
-    #'chiral_tag': [0, 1, 2, 3],
+    'formal_charge': [-1, -2, 1, 2, 0],
+    'chiral_tag': [0, 1, 2, 3],
     'num_Hs': [0, 1, 2, 3, 4],
-    #'hybridization': [
-        #Chem.rdchem.HybridizationType.SP,
-        #Chem.rdchem.HybridizationType.SP2,
-        #Chem.rdchem.HybridizationType.SP3,
-        #Chem.rdchem.HybridizationType.SP3D,
-        #Chem.rdchem.HybridizationType.SP3D2
-    #],
+    'hybridization': [
+        Chem.rdchem.HybridizationType.SP,
+        Chem.rdchem.HybridizationType.SP2,
+        Chem.rdchem.HybridizationType.SP3,
+        Chem.rdchem.HybridizationType.SP3D,
+        Chem.rdchem.HybridizationType.SP3D2
+    ],
 }
 
 # Distance feature sizes
@@ -65,11 +28,8 @@ THREE_D_DISTANCE_MAX = 20
 THREE_D_DISTANCE_STEP = 1
 THREE_D_DISTANCE_BINS = list(range(0, THREE_D_DISTANCE_MAX + 1, THREE_D_DISTANCE_STEP))
 
-# Tính tổng số chiều của các vector one-hot KGG
-KGG_FDIM = sum(len(choices) + 1 for choices in KGG_FEATURES.values())
-
 # len(choices) + 1 to include room for uncommon values; + 2 at end for IsAromatic and mass
-ATOM_FDIM = sum(len(choices) + 1 for choices in ATOM_FEATURES.values()) + 2 + KGG_FDIM + 10
+ATOM_FDIM = sum(len(choices) + 1 for choices in ATOM_FEATURES.values()) + 2
 EXTRA_ATOM_FDIM = 0
 BOND_FDIM = 14
 EXTRA_BOND_FDIM = 0
@@ -178,75 +138,6 @@ def onek_encoding_unk(value: int, choices: List[int]) -> List[int]:
 
     return encoding
 
-def get_kgg_hybridization_features(atom: Chem.rdchem.Atom) -> List[int]:
-    """
-    Tính toán vector đặc trưng lai hóa 5 chiều theo KGG và chuyển sang One-Hot Encoding.
-    """
-    hyb_type = str(atom.GetHybridization())
-    total_sigma = atom.GetDegree() + atom.GetTotalNumHs()
-    max_bonds = MAX_BOND_HYBRIDIZATION.get(hyb_type, 0)
-    
-    # Logic KGG: Tính số cặp e tự do
-    num_lone_pairs = max_bonds - total_sigma
-    
-    # Lấy vector thô [s, p, d, neighbors, lone_pairs] từ dict
-    # Ví dụ: [1, 3, 0, 4, 0]
-    raw_vec = HYBRIDIZATION_DICT.get((total_sigma, num_lone_pairs), [0, 0, 0, 0, 0])
-    s, p, d, n, lp = raw_vec
-    
-    # --- CHUYỂN ĐỔI SANG ONE-HOT ---
-    # Sử dụng hàm onek_encoding_unk có sẵn của chemprop
-    features = []
-    features += onek_encoding_unk(s, KGG_FEATURES['orbital_s'])
-    features += onek_encoding_unk(p, KGG_FEATURES['orbital_p'])
-    features += onek_encoding_unk(d, KGG_FEATURES['orbital_d'])
-    features += onek_encoding_unk(n, KGG_FEATURES['neighbors'])
-    features += onek_encoding_unk(lp, KGG_FEATURES['lone_pairs'])
-    
-    return features
-
-def get_syncat_atom_features_batch(mol: Chem.Mol) -> List[List[int]]:
-    """
-    Tính toán features SynCat cho TOÀN BỘ phân tử một lần duy nhất.
-    Trả về: List các feature vector tương ứng với từng atom theo thứ tự index.
-    """
-    n_atoms = mol.GetNumAtoms()
-    # Khởi tạo ma trận features: [n_atoms, 10]
-    # 10 dims = 2 (D/A) + 6 (Rings) + 2 (Chirality)
-    features_batch = [[0] * 10 for _ in range(n_atoms)]
-    
-    # 1. Donor/Acceptor (Phần nặng nhất - Chỉ chạy 1 lần)
-    if CHEM_FEATURE_FACTORY:
-        feats = CHEM_FEATURE_FACTORY.GetFeaturesForMol(mol)
-        for f in feats:
-            family = f.GetFamily()
-            if family in ['Donor', 'Acceptor']:
-                # Một feature có thể thuộc về 1 hoặc nhiều atom
-                for atom_idx in f.GetAtomIds():
-                    if atom_idx < n_atoms:
-                        if family == 'Donor':
-                            features_batch[atom_idx][0] = 1
-                        elif family == 'Acceptor':
-                            features_batch[atom_idx][1] = 1
-
-    # 2. Ring Sizes & Chirality (Phần nhẹ - Duyệt qua từng atom)
-    ringsize_list = [3, 4, 5, 6, 7, 8]
-    for atom in mol.GetAtoms():
-        idx = atom.GetIdx()
-        
-        # Check Ring Sizes (Indices 2-7)
-        for i, size in enumerate(ringsize_list):
-            if atom.IsInRingSize(size):
-                features_batch[idx][2 + i] = 1
-                
-        # Check Chirality (Indices 8-9)
-        tag = atom.GetChiralTag()
-        if tag == Chem.rdchem.ChiralType.CHI_TETRAHEDRAL_CW:
-            features_batch[idx][8] = 1
-        elif tag == Chem.rdchem.ChiralType.CHI_TETRAHEDRAL_CCW:
-            features_batch[idx][9] = 1
-
-    return features_batch
 
 def atom_features(atom: Chem.rdchem.Atom, functional_groups: List[int] = None) -> List[Union[bool, int, float]]:
     """
@@ -261,13 +152,12 @@ def atom_features(atom: Chem.rdchem.Atom, functional_groups: List[int] = None) -
     else:
         features = onek_encoding_unk(atom.GetAtomicNum() - 1, ATOM_FEATURES['atomic_num']) + \
             onek_encoding_unk(atom.GetTotalDegree(), ATOM_FEATURES['degree']) + \
+            onek_encoding_unk(atom.GetFormalCharge(), ATOM_FEATURES['formal_charge']) + \
+            onek_encoding_unk(int(atom.GetChiralTag()), ATOM_FEATURES['chiral_tag']) + \
             onek_encoding_unk(int(atom.GetTotalNumHs()), ATOM_FEATURES['num_Hs']) + \
+            onek_encoding_unk(int(atom.GetHybridization()), ATOM_FEATURES['hybridization']) + \
             [1 if atom.GetIsAromatic() else 0] + \
             [atom.GetMass() * 0.01]  # scaled to about the same range as other features
-        
-        kgg_hyb_feats = get_kgg_hybridization_features(atom)
-        
-        features += kgg_hyb_feats
         if functional_groups is not None:
             features += functional_groups
     return features
@@ -381,11 +271,8 @@ class MolGraph:
         self.overwrite_default_bond_features = overwrite_default_bond_features
 
         if not self.is_reaction:
-            base_features = [atom_features(atom) for atom in mol.GetAtoms()]
-            syncat_features = get_syncat_atom_features_batch(mol)
-            
-            self.f_atoms = [b + s for b, s in zip(base_features, syncat_features)]
-     
+            # Get atom features
+            self.f_atoms = [atom_features(atom) for atom in mol.GetAtoms()]
             if atom_features_extra is not None:
                 if overwrite_default_atom_features:
                     self.f_atoms = [descs.tolist() for descs in atom_features_extra]
