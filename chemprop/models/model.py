@@ -36,7 +36,10 @@ class InteractionModel(nn.Module):
         self.convs = nn.ModuleList([nn.Conv1d(args.prot_hidden, 2*args.prot_hidden, args.kernel_size, padding=args.kernel_size//2) for _ in range(args.prot_1dcnn_num)])   # convolutional layers
         self.rnns = nn.ModuleList([nn.GRU(args.prot_1d_out,args.prot_1d_out, num_layers=1, bidirectional=True,  batch_first=True) for _ in range(args.prot_1dcnn_num)])
         self.fc1_xt = nn.Linear(args.prot_hidden*args.prot_1d_out, args.hidden_size)
-        #self.fc_mg = nn.Linear(2048, args.hidden_size)
+        
+        # ĐÃ SỬA: Bỏ dòng này
+        # self.fc_mg = nn.Linear(2048, args.hidden_size)
+        
         self.fc_residual_connection = nn.Linear(args.prot_hidden,args.prot_1d_out)
         self.scale = torch.sqrt(torch.FloatTensor([args.alpha])).cuda()
         self.relu = nn.ReLU()
@@ -192,18 +195,6 @@ class InteractionModel(nn.Module):
                 bond_features_batch: List[np.ndarray] = None) -> torch.FloatTensor:
         """
         Runs the :class:`InteractionNet` on input.
-
-        :param batch: A list of list of SMILES, a list of list of RDKit molecules, or a
-                      list of :class:`~chemprop.features.featurization.BatchMolGraph`.
-                      The outer list or BatchMolGraph is of length :code:`num_molecules` (number of datapoints in batch),
-                      the inner list is of length :code:`number_of_molecules` (number of molecules per datapoint).
-        :sequence_tensor: A list of numpy arrays contraning Protein Encoding vectors
-        :add_feature: A list of numpy arrays containing additional features (Morgan' Fingerprint).
-        :param atom_descriptors_batch: A list of numpy arrays containing additional atom descriptors.
-        :param atom_features_batch: A list of numpy arrays containing additional atom features.
-        :param bond_features_batch: A list of numpy arrays containing additional bond features.
-        :return: The output of the :class:`InteractionNet`, which is either property predictions
-                 or molecule features if :code:`self.featurizer=True`.
         """
         if self.featurizer:
             return self.featurize(batch, features_batch, atom_descriptors_batch,
@@ -234,10 +225,14 @@ class InteractionModel(nn.Module):
         protein_tensor = out_conv.view(out_conv.size(0),out_conv.size(1)*out_conv.size(2))
         # 1D Protein feature
         protein_tensor = self.do(self.relu(self.fc1_xt(self.normalization(protein_tensor))))
-        # 1D Morgan feature
+        
+        # ĐÃ SỬA: Bỏ xử lý add_feature (Morgan)
         # add_feature = self.do(self.relu(self.fc_mg(add_feature.cuda())))
+        
         # Cross attention blocks
-        output = self.CAB(mpnn_out,protein_tensor)
+        # ĐÃ SỬA: Chỉ truyền 2 tham số
+        output = self.CAB(mpnn_out, protein_tensor)
+        
         # Output
         output = self.ffn(output)
 
