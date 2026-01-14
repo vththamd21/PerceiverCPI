@@ -5,12 +5,84 @@ from rdkit import Chem
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from .mpn import MPN
+#from .mpn import MPN
 from chemprop.args import TrainArgs
 from chemprop.features import BatchMolGraph
 from chemprop.nn_utils import get_activation_function, initialize_weights
-# ĐÃ SỬA: Bỏ import CAB vì không dùng nữa
 # from .CAB import CrossAttentionBlock as CAB 
+
+class GINLayer(nn.Module):
+    def __init__(self, hidden_size, epsilon = 0):
+        super(GINLayer, self).__init__()
+        self.mlp = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size),
+            nn.BatchNorm1D(hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, hidden_size)
+            nn.ReLU()
+        )
+        self.epsilon = nn.Parameter(torch.Tensor([epsilon]))
+
+    def forward(self, x, edge_index):
+        source_idx = edge_index[0]
+        target_idx = edge_index[1]
+
+        out = torch.zeros_like(x)
+        out.index_add_(0, target_idx, x[source_idx])
+
+        out = out + (1 + self.epsilon) * x
+        out = self.mlp(out)
+        return out
+class GINEncoder(nn.Module):
+    def __init__(self, args):
+        super(GINEncoder, self).__init__()
+        self.atom_fdim = args.atom_features_size
+        self.hidden_size = args.hidden_size
+        self.depth = args.depth
+        self.dropout = nn.Dropout(args.dropout)
+
+        self.W_in = nn.Linear(self.atom_fdim, self.hidden_size)
+
+        self.layers = nn.ModuleList()
+        for _ in range (self.depth):
+            self.layers.append(GINLayer(self.hidden_size))
+    
+    def foward(self, batch, feature_batch=None, atom_descriptors_batch=None, atom_features_batch=None, bond_features_batch=None):
+        components = batch.get_components(atom_messages=True)
+        f_atoms = components.f_atoms
+        a2a = components.a2a
+        a_scope = components.a_scope
+
+        f_atoms = f_atoms.cuda()
+
+        source_indices = []
+        target_indices =[]
+        for i, neighbors in enumerate(a2a):
+            for neighbor in neighbors:
+                source_indices.append(neighbor)
+                target_indices.append(i)
+            
+        if len(source_indices) > 0:
+            edge_index = torch.tensor([source_indices, target_indices], dtype=torch.long).cuda()
+        else:
+            edge_index = torch.zeros((2,0), dtype = torch).long.cuda()
+
+        x = self.W_in(f_atoms)
+        x = F.relu(x)
+
+        for layer in self.layers:
+            x = layer(x, edge_index)
+            x = self.dropout(x)
+
+        mol_vecs = []
+        for i, (a_start, a_len) in enumerate(a_scope):
+            if a_len == 0:
+                mol_vecs.append(torch.zeros(self.hidden_size).cuda())
+            else: 
+                cur_atoms = x.narrow(0, a_start, a_len)
+                mol_vec = cur_atoms.mean(dim = 0)
+                mol_vecs.append(mol_vec)
+        return torch.stack(mol_vecs, dim = 0)
 
 
 class InteractionModel(nn.Module):
@@ -41,8 +113,6 @@ class InteractionModel(nn.Module):
         self.relu = nn.ReLU()
         self.norm = nn.LayerNorm(args.prot_1d_out)
         self.do = nn.Dropout(args.dropout)
-
-        # ĐÃ SỬA: Bỏ khởi tạo self.CAB
         # self.CAB = CAB(args)
 
         self.output_size = args.num_tasks
@@ -64,15 +134,7 @@ class InteractionModel(nn.Module):
         """
         Creates the message passing encoder for the model.
         """
-        self.encoder = MPN(args)
-              
-        if args.checkpoint_frzn is not None:
-            if args.freeze_first_only:
-                for param in list(self.encoder.encoder.children())[0].parameters():
-                    param.requires_grad=False
-            else:
-                for param in self.encoder.parameters():
-                    param.requires_grad=False                   
+        self.encoder = GINEncoder(args)                   
                         
     def create_ffn(self, args: TrainArgs) -> None:
         """
@@ -89,16 +151,11 @@ class InteractionModel(nn.Module):
             if args.use_input_features:
                 first_linear_dim += args.features_size
         
-        # --- ĐÃ SỬA: Cập nhật kích thước input cho FFN ---
-        # Vì ta nối (concat) mpnn_out (size: hidden_size) và protein_tensor (size: hidden_size)
-        # Nên kích thước đầu vào của FFN phải cộng thêm args.hidden_size
         first_linear_dim += args.hidden_size
-        # -------------------------------------------------
 
         if args.atom_descriptors == 'descriptor':
             first_linear_dim += args.atom_descriptors_size
 
-        first_linear_dim = first_linear_dim
         dropout = nn.Dropout(args.dropout)
         activation = get_activation_function(args.activation)
 
@@ -128,18 +185,9 @@ class InteractionModel(nn.Module):
 
         # Create FFN model
         self.ffn = nn.Sequential(*ffn)
-        
-        if args.checkpoint_frzn is not None:
-            if args.frzn_ffn_layers >0:
-                for param in list(self.ffn.parameters())[0:2*args.frzn_ffn_layers]:
-                    param.requires_grad=False
-
 
     def featurize(self, batch, features_batch=None, atom_descriptors_batch=None, atom_features_batch=None, bond_features_batch=None) -> torch.FloatTensor:
         return self.ffn[:-1](self.encoder(batch, features_batch, atom_descriptors_batch, atom_features_batch, bond_features_batch))
-
-    def fingerprint(self, batch, features_batch=None, atom_descriptors_batch=None) -> torch.FloatTensor:
-        return self.encoder(batch, features_batch, atom_descriptors_batch)
 
     def normalization(self, vector_present, threshold=0.1):
         vector_present_clone = vector_present.clone()
@@ -147,30 +195,17 @@ class InteractionModel(nn.Module):
         de = vector_present_clone.max(1,keepdim = True)[0] - vector_present_clone.min(1,keepdim = True)[0]
         return num / de
 
-    def forward(self,
-                batch: Union[List[List[str]], List[List[Chem.Mol]], List[List[Tuple[Chem.Mol, Chem.Mol]]], List[BatchMolGraph]],
-                sequence_tensor: List[np.ndarray] = None,
-                add_feature: List[np.ndarray] = None,
-                features_batch: List[np.ndarray] = None,
-                atom_descriptors_batch: List[np.ndarray] = None,
-                atom_features_batch: List[np.ndarray] = None,
-                bond_features_batch: List[np.ndarray] = None) -> torch.FloatTensor:
-        """
-        Runs the :class:`InteractionNet` on input.
-        """
+    def forward(self, batch, sequence_tensor=None, add_feature=None, features_batch=None, atom_descriptors_batch=None, atom_features_batch=None, bond_features_batch=None) -> torch.FloatTensor:
         if self.featurizer:
-            return self.featurize(batch, features_batch, atom_descriptors_batch,
-                                  atom_features_batch, bond_features_batch)
+            return self.featurize(batch, features_batch, atom_descriptors_batch, atom_features_batch, bond_features_batch)
         
-        # 1. Calculate Compound Features (D-MPNN)
-        mpnn_out = self.normalization(self.encoder(batch, features_batch, atom_descriptors_batch,
-                                       atom_features_batch, bond_features_batch))
+        # 1. Compound Features (GIN)
+        mpnn_out = self.normalization(self.encoder(batch, features_batch, atom_descriptors_batch, atom_features_batch, bond_features_batch))
 
-        # 2. Calculate Protein Features (CNN + FC)
+        # 2. Protein Features (CNN)
         sequence = sequence_tensor.cuda()
         embedded_xt = self.embedding_xt(sequence)
         input_nn = self.conv_in(embedded_xt)
-
         conv_input = input_nn.permute(0, 2, 1)
 
         for i, conv in enumerate(self.convs):
@@ -183,12 +218,10 @@ class InteractionModel(nn.Module):
         protein_tensor = out_conv.view(out_conv.size(0),out_conv.size(1)*out_conv.size(2))
         protein_tensor = self.do(self.relu(self.fc1_xt(self.normalization(protein_tensor))))
         
-        # --- ĐÃ SỬA: Thay thế Cross-Attention bằng Concat ---
-        # Nối vector thuốc và vector protein lại với nhau
+        # 3. Concatenation (Compound || Protein)
         output = torch.cat([mpnn_out, protein_tensor], dim=1)
-        # ----------------------------------------------------
         
-        # Output layers (FFN)
+        # 4. Prediction
         output = self.ffn(output)
 
         if self.classification and not self.training:
