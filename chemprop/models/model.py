@@ -51,17 +51,18 @@ class GINEncoder(nn.Module):
             self.layers.append(GINLayer(self.hidden_size))
 
     def forward(self, batch, features_batch=None, atom_descriptors_batch=None, atom_features_batch=None, bond_features_batch=None):
-        # --- SỬA LỖI QUAN TRỌNG TẠI ĐÂY ---
-        # Thay vì dùng isinstance(batch, BatchMolGraph) dễ bị lỗi khi reload code,
-        # ta kiểm tra xem đối tượng có phương thức 'get_components' hay không.
+        # --- SỬA LỖI TẠI ĐÂY ---
+        # 1. Nếu batch là list chứa các BatchMolGraph (đầu ra của DataLoader), lấy cái đầu tiên ra.
+        # Dùng hasattr để check 'get_components' nhằm tránh lỗi reload class.
+        if isinstance(batch, list) and len(batch) > 0 and hasattr(batch[0], 'get_components'):
+            batch = batch[0]
+            
+        # 2. Nếu batch vẫn chưa phải là đồ thị (ví dụ là list SMILES), thì mới gọi mol2graph
         if not hasattr(batch, 'get_components'):
-            # Xử lý tham số mặc định
             af_batch = atom_features_batch if atom_features_batch is not None else (None,)
             bf_batch = bond_features_batch if bond_features_batch is not None else (None,)
-            
-            # Gọi mol2graph nếu batch chưa phải là đồ thị
             batch = mol2graph(batch, af_batch, bf_batch)
-        # -----------------------------------
+        # -----------------------
         
         components = batch.get_components(atom_messages=True)
         f_atoms = components.f_atoms
