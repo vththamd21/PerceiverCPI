@@ -6,7 +6,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from chemprop.args import TrainArgs
-# --- SỬA 1: Thêm import mol2graph ---
 from chemprop.features import BatchMolGraph, mol2graph
 from chemprop.nn_utils import get_activation_function, initialize_weights
 
@@ -38,7 +37,6 @@ class GINLayer(nn.Module):
 class GINEncoder(nn.Module):
     def __init__(self, args):
         super(GINEncoder, self).__init__()
-        # --- SỬA 2: Lưu args để dùng cho mol2graph ---
         self.args = args 
         
         self.atom_fdim = args.atom_features_size
@@ -53,9 +51,15 @@ class GINEncoder(nn.Module):
             self.layers.append(GINLayer(self.hidden_size))
 
     def forward(self, batch, features_batch=None, atom_descriptors_batch=None, atom_features_batch=None, bond_features_batch=None):
-        # --- SỬA 3: Kiểm tra và chuyển đổi list -> BatchMolGraph ---
+        # --- ĐÃ SỬA: Logic gọi mol2graph ---
         if not isinstance(batch, BatchMolGraph):
-            batch = mol2graph(batch, self.args)
+            # Xử lý tham số mặc định để tránh lỗi NoneType khi zip
+            af_batch = atom_features_batch if atom_features_batch is not None else (None,)
+            bf_batch = bond_features_batch if bond_features_batch is not None else (None,)
+            
+            # Gọi mol2graph với đúng tham số features thay vì self.args
+            batch = mol2graph(batch, af_batch, bf_batch)
+        # -----------------------------------
         
         components = batch.get_components(atom_messages=True)
         f_atoms = components.f_atoms
