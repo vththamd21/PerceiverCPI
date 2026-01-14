@@ -5,9 +5,9 @@ from rdkit import Chem
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-# from .mpn import MPN 
 from chemprop.args import TrainArgs
-from chemprop.features import BatchMolGraph
+# --- SỬA 1: Thêm import mol2graph ---
+from chemprop.features import BatchMolGraph, mol2graph
 from chemprop.nn_utils import get_activation_function, initialize_weights
 
 # --- GIN IMPLEMENTATION ---
@@ -38,6 +38,9 @@ class GINLayer(nn.Module):
 class GINEncoder(nn.Module):
     def __init__(self, args):
         super(GINEncoder, self).__init__()
+        # --- SỬA 2: Lưu args để dùng cho mol2graph ---
+        self.args = args 
+        
         self.atom_fdim = args.atom_features_size
         self.hidden_size = args.hidden_size
         self.depth = args.depth
@@ -50,6 +53,10 @@ class GINEncoder(nn.Module):
             self.layers.append(GINLayer(self.hidden_size))
 
     def forward(self, batch, features_batch=None, atom_descriptors_batch=None, atom_features_batch=None, bond_features_batch=None):
+        # --- SỬA 3: Kiểm tra và chuyển đổi list -> BatchMolGraph ---
+        if not isinstance(batch, BatchMolGraph):
+            batch = mol2graph(batch, self.args)
+        
         components = batch.get_components(atom_messages=True)
         f_atoms = components.f_atoms
         a2a = components.a2a
@@ -126,7 +133,6 @@ class InteractionModel(nn.Module):
         initialize_weights(self)
 
     def create_encoder(self, args: TrainArgs) -> None:
-        # Sử dụng GINEncoder thay vì MPN
         self.encoder = GINEncoder(args)
                                 
     def create_ffn(self, args: TrainArgs) -> None:
@@ -141,7 +147,6 @@ class InteractionModel(nn.Module):
             if args.use_input_features:
                 first_linear_dim += args.features_size
         
-        # + hidden_size vì nối vector compound (GIN) với vector protein
         first_linear_dim += args.hidden_size
 
         if args.atom_descriptors == 'descriptor':
@@ -181,10 +186,8 @@ class InteractionModel(nn.Module):
         if self.featurizer:
             return self.featurize(batch, features_batch, atom_descriptors_batch, atom_features_batch, bond_features_batch)
         
-        # 1. Compound Features (GIN)
         mpnn_out = self.normalization(self.encoder(batch, features_batch, atom_descriptors_batch, atom_features_batch, bond_features_batch))
 
-        # 2. Protein Features (CNN)
         sequence = sequence_tensor.cuda()
         embedded_xt = self.embedding_xt(sequence)
         input_nn = self.conv_in(embedded_xt)
@@ -200,10 +203,8 @@ class InteractionModel(nn.Module):
         protein_tensor = out_conv.view(out_conv.size(0),out_conv.size(1)*out_conv.size(2))
         protein_tensor = self.do(self.relu(self.fc1_xt(self.normalization(protein_tensor))))
         
-        # 3. Concatenation (Compound || Protein)
         output = torch.cat([mpnn_out, protein_tensor], dim=1)
         
-        # 4. Prediction
         output = self.ffn(output)
 
         if self.classification and not self.training:
