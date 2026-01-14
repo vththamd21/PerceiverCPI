@@ -16,10 +16,9 @@ class GINLayer(nn.Module):
         super(GINLayer, self).__init__()
         self.mlp = nn.Sequential(
             nn.Linear(hidden_size, hidden_size),
-            nn.BatchNorm1D(hidden_size),
             nn.ReLU(),
-            nn.Linear(hidden_size, hidden_size)
-            nn.BatchNorm1D(hidden_size),
+            nn.Linear(hidden_size, hidden_size),
+            nn.BatchNorm1d(hidden_size),
             nn.ReLU()
         )
         self.epsilon = nn.Parameter(torch.Tensor([epsilon]))
