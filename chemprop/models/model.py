@@ -28,6 +28,7 @@ class GINLayer(nn.Module):
         target_idx = edge_index[1]
         
         out = torch.zeros_like(x)
+        # Cộng dồn feature từ hàng xóm (source) vào node đích (target)
         out.index_add_(0, target_idx, x[source_idx]) 
         
         out = out + (1 + self.epsilon) * x 
@@ -51,38 +52,47 @@ class GINEncoder(nn.Module):
             self.layers.append(GINLayer(self.hidden_size))
 
     def forward(self, batch, features_batch=None, atom_descriptors_batch=None, atom_features_batch=None, bond_features_batch=None):
-        # --- SỬA LỖI TẠI ĐÂY ---
-        # 1. Nếu batch là list chứa các BatchMolGraph (đầu ra của DataLoader), lấy cái đầu tiên ra.
-        # Dùng hasattr để check 'get_components' nhằm tránh lỗi reload class.
+        # 1. Xử lý đầu vào: Nếu là list (do DataLoader trả về), lấy phần tử đầu tiên
         if isinstance(batch, list) and len(batch) > 0 and hasattr(batch[0], 'get_components'):
             batch = batch[0]
             
-        # 2. Nếu batch vẫn chưa phải là đồ thị (ví dụ là list SMILES), thì mới gọi mol2graph
+        # 2. Nếu chưa phải BatchMolGraph, gọi mol2graph
         if not hasattr(batch, 'get_components'):
             af_batch = atom_features_batch if atom_features_batch is not None else (None,)
             bf_batch = bond_features_batch if bond_features_batch is not None else (None,)
             batch = mol2graph(batch, af_batch, bf_batch)
-        # -----------------------
         
-        components = batch.get_components(atom_messages=True)
-        f_atoms = components.f_atoms
-        a2a = components.a2a
-        a_scope = components.a_scope
+        # 3. Lấy dữ liệu từ đồ thị (SỬA LỖI TẠI ĐÂY)
+        # get_components trả về tuple, cần unpack ra
+        f_atoms, f_bonds, a2b, b2a, b2revb, a_scope, b_scope = batch.get_components(atom_messages=True)
+        
+        # Lấy cấu trúc liên kết atom-to-atom (cho GIN)
+        # get_a2a() trả về tensor (num_atoms, max_neighbors) chứa index của hàng xóm
+        a2a = batch.get_a2a() 
 
         f_atoms = f_atoms.cuda()
+        a2a = a2a.cuda()
         
-        source_indices = []
-        target_indices = []
-        for i, neighbors in enumerate(a2a):
-            for neighbor in neighbors:
-                source_indices.append(neighbor)
-                target_indices.append(i)
+        # 4. Tạo edge_index từ a2a
+        # a2a có padding là 0 (vì atom index bắt đầu từ 1 trong Chemprop)
+        num_atoms = a2a.size(0)
         
-        if len(source_indices) > 0:
-            edge_index = torch.tensor([source_indices, target_indices], dtype=torch.long).cuda()
+        # Tạo index cho target (node nhận tin): [0, 0...], [1, 1...], ...
+        target_indices = torch.arange(num_atoms, device=a2a.device).unsqueeze(1).expand_as(a2a)
+        
+        # Flatten để tạo danh sách cạnh
+        source_flat = a2a.flatten()
+        target_flat = target_indices.flatten()
+        
+        # Lọc bỏ padding (index 0 là padding/dummy node, không phải atom thật)
+        mask = source_flat != 0
+        
+        if mask.sum() > 0:
+            edge_index = torch.stack([source_flat[mask], target_flat[mask]], dim=0)
         else:
-            edge_index = torch.zeros((2, 0), dtype=torch.long).cuda()
+            edge_index = torch.zeros((2, 0), dtype=torch.long, device=a2a.device)
 
+        # 5. Chạy GIN
         x = self.W_in(f_atoms)
         x = F.relu(x)
         
@@ -90,6 +100,7 @@ class GINEncoder(nn.Module):
             x = layer(x, edge_index)
             x = self.dropout(x)
 
+        # 6. Pooling (Readout)
         mol_vecs = []
         for i, (a_start, a_len) in enumerate(a_scope):
             if a_len == 0:
