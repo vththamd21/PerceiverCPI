@@ -6,7 +6,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from chemprop.args import TrainArgs
-# --- SỬA: Import thêm get_atom_fdim ---
 from chemprop.features import BatchMolGraph, mol2graph, get_atom_fdim
 from chemprop.nn_utils import get_activation_function, initialize_weights
 
@@ -29,7 +28,6 @@ class GINLayer(nn.Module):
         target_idx = edge_index[1]
         
         out = torch.zeros_like(x)
-        # Cộng dồn feature từ hàng xóm (source) vào node đích (target)
         out.index_add_(0, target_idx, x[source_idx]) 
         
         out = out + (1 + self.epsilon) * x 
@@ -41,18 +39,15 @@ class GINEncoder(nn.Module):
         super(GINEncoder, self).__init__()
         self.args = args 
         
-        # --- SỬA LỖI SIZE TẠI ĐÂY ---
-        # Lấy kích thước feature mặc định (thường là 133) + feature bổ sung (nếu có)
+        # Lấy kích thước feature mặc định + bổ sung
         self.atom_fdim = get_atom_fdim(overwrite_default_atom=args.overwrite_default_atom_features)
         if args.atom_features_size > 0:
             self.atom_fdim += args.atom_features_size
-        # -----------------------------
 
         self.hidden_size = args.hidden_size
         self.depth = args.depth
         self.dropout = nn.Dropout(args.dropout)
         
-        # Bây giờ self.atom_fdim sẽ là 133 (hoặc lớn hơn), khớp với dữ liệu input
         self.W_in = nn.Linear(self.atom_fdim, self.hidden_size)
 
         self.layers = nn.ModuleList()
@@ -60,36 +55,26 @@ class GINEncoder(nn.Module):
             self.layers.append(GINLayer(self.hidden_size))
 
     def forward(self, batch, features_batch=None, atom_descriptors_batch=None, atom_features_batch=None, bond_features_batch=None):
-        # 1. Xử lý đầu vào: Nếu là list (do DataLoader trả về), lấy phần tử đầu tiên
         if isinstance(batch, list) and len(batch) > 0 and hasattr(batch[0], 'get_components'):
             batch = batch[0]
             
-        # 2. Nếu chưa phải BatchMolGraph, gọi mol2graph
         if not hasattr(batch, 'get_components'):
             af_batch = atom_features_batch if atom_features_batch is not None else (None,)
             bf_batch = bond_features_batch if bond_features_batch is not None else (None,)
             batch = mol2graph(batch, af_batch, bf_batch)
         
-        # 3. Lấy dữ liệu từ đồ thị
         f_atoms, f_bonds, a2b, b2a, b2revb, a_scope, b_scope = batch.get_components(atom_messages=True)
-        
-        # Lấy cấu trúc liên kết atom-to-atom (cho GIN)
         a2a = batch.get_a2a() 
 
         f_atoms = f_atoms.cuda()
         a2a = a2a.cuda()
         
-        # 4. Tạo edge_index từ a2a
         num_atoms = a2a.size(0)
-        
-        # Tạo index cho target (node nhận tin): [0, 0...], [1, 1...], ...
         target_indices = torch.arange(num_atoms, device=a2a.device).unsqueeze(1).expand_as(a2a)
         
-        # Flatten để tạo danh sách cạnh
         source_flat = a2a.flatten()
         target_flat = target_indices.flatten()
         
-        # Lọc bỏ padding (index 0 là padding/dummy node, không phải atom thật)
         mask = source_flat != 0
         
         if mask.sum() > 0:
@@ -97,15 +82,13 @@ class GINEncoder(nn.Module):
         else:
             edge_index = torch.zeros((2, 0), dtype=torch.long, device=a2a.device)
 
-        # 5. Chạy GIN
-        x = self.W_in(f_atoms) # Lúc này shape sẽ khớp: (N, 133) x (133, hidden)
+        x = self.W_in(f_atoms)
         x = F.relu(x)
         
         for layer in self.layers:
             x = layer(x, edge_index)
             x = self.dropout(x)
 
-        # 6. Pooling (Readout)
         mol_vecs = []
         for i, (a_start, a_len) in enumerate(a_scope):
             if a_len == 0:
@@ -119,8 +102,6 @@ class GINEncoder(nn.Module):
 # --------------------------
 
 class InteractionModel(nn.Module):
-    """A :class:`InteractionNet` using GIN for Compound and CNN for Protein, with Concatenation."""
-
     def __init__(self, args: TrainArgs, featurizer: bool = False):
         super(InteractionModel, self).__init__()
 
@@ -199,11 +180,17 @@ class InteractionModel(nn.Module):
     def fingerprint(self, batch, features_batch=None, atom_descriptors_batch=None) -> torch.FloatTensor:
         return self.encoder(batch, features_batch, atom_descriptors_batch)
 
+    # --- ĐÃ SỬA: Thêm epsilon để tránh chia cho 0 ---
     def normalization(self, vector_present, threshold=0.1):
         vector_present_clone = vector_present.clone()
-        num = vector_present_clone - vector_present_clone.min(1,keepdim = True)[0]
-        de = vector_present_clone.max(1,keepdim = True)[0] - vector_present_clone.min(1,keepdim = True)[0]
+        min_v = vector_present_clone.min(1, keepdim=True)[0]
+        max_v = vector_present_clone.max(1, keepdim=True)[0]
+        
+        num = vector_present_clone - min_v
+        de = (max_v - min_v) + 1e-8 
+        
         return num / de
+    # ------------------------------------------------
 
     def forward(self, batch, sequence_tensor=None, add_feature=None, features_batch=None, atom_descriptors_batch=None, atom_features_batch=None, bond_features_batch=None) -> torch.FloatTensor:
         if self.featurizer:
