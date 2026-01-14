@@ -51,13 +51,15 @@ class GINEncoder(nn.Module):
             self.layers.append(GINLayer(self.hidden_size))
 
     def forward(self, batch, features_batch=None, atom_descriptors_batch=None, atom_features_batch=None, bond_features_batch=None):
-        # --- ĐÃ SỬA: Logic gọi mol2graph ---
-        if not isinstance(batch, BatchMolGraph):
-            # Xử lý tham số mặc định để tránh lỗi NoneType khi zip
+        # --- SỬA LỖI QUAN TRỌNG TẠI ĐÂY ---
+        # Thay vì dùng isinstance(batch, BatchMolGraph) dễ bị lỗi khi reload code,
+        # ta kiểm tra xem đối tượng có phương thức 'get_components' hay không.
+        if not hasattr(batch, 'get_components'):
+            # Xử lý tham số mặc định
             af_batch = atom_features_batch if atom_features_batch is not None else (None,)
             bf_batch = bond_features_batch if bond_features_batch is not None else (None,)
             
-            # Gọi mol2graph với đúng tham số features thay vì self.args
+            # Gọi mol2graph nếu batch chưa phải là đồ thị
             batch = mol2graph(batch, af_batch, bf_batch)
         # -----------------------------------
         
