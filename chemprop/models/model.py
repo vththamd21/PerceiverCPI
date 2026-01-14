@@ -6,7 +6,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from chemprop.args import TrainArgs
-from chemprop.features import BatchMolGraph, mol2graph
+# --- SỬA: Import thêm get_atom_fdim ---
+from chemprop.features import BatchMolGraph, mol2graph, get_atom_fdim
 from chemprop.nn_utils import get_activation_function, initialize_weights
 
 # --- GIN IMPLEMENTATION ---
@@ -40,11 +41,18 @@ class GINEncoder(nn.Module):
         super(GINEncoder, self).__init__()
         self.args = args 
         
-        self.atom_fdim = args.atom_features_size
+        # --- SỬA LỖI SIZE TẠI ĐÂY ---
+        # Lấy kích thước feature mặc định (thường là 133) + feature bổ sung (nếu có)
+        self.atom_fdim = get_atom_fdim(overwrite_default_atom=args.overwrite_default_atom_features)
+        if args.atom_features_size > 0:
+            self.atom_fdim += args.atom_features_size
+        # -----------------------------
+
         self.hidden_size = args.hidden_size
         self.depth = args.depth
         self.dropout = nn.Dropout(args.dropout)
         
+        # Bây giờ self.atom_fdim sẽ là 133 (hoặc lớn hơn), khớp với dữ liệu input
         self.W_in = nn.Linear(self.atom_fdim, self.hidden_size)
 
         self.layers = nn.ModuleList()
@@ -62,19 +70,16 @@ class GINEncoder(nn.Module):
             bf_batch = bond_features_batch if bond_features_batch is not None else (None,)
             batch = mol2graph(batch, af_batch, bf_batch)
         
-        # 3. Lấy dữ liệu từ đồ thị (SỬA LỖI TẠI ĐÂY)
-        # get_components trả về tuple, cần unpack ra
+        # 3. Lấy dữ liệu từ đồ thị
         f_atoms, f_bonds, a2b, b2a, b2revb, a_scope, b_scope = batch.get_components(atom_messages=True)
         
         # Lấy cấu trúc liên kết atom-to-atom (cho GIN)
-        # get_a2a() trả về tensor (num_atoms, max_neighbors) chứa index của hàng xóm
         a2a = batch.get_a2a() 
 
         f_atoms = f_atoms.cuda()
         a2a = a2a.cuda()
         
         # 4. Tạo edge_index từ a2a
-        # a2a có padding là 0 (vì atom index bắt đầu từ 1 trong Chemprop)
         num_atoms = a2a.size(0)
         
         # Tạo index cho target (node nhận tin): [0, 0...], [1, 1...], ...
@@ -93,7 +98,7 @@ class GINEncoder(nn.Module):
             edge_index = torch.zeros((2, 0), dtype=torch.long, device=a2a.device)
 
         # 5. Chạy GIN
-        x = self.W_in(f_atoms)
+        x = self.W_in(f_atoms) # Lúc này shape sẽ khớp: (N, 133) x (133, hidden)
         x = F.relu(x)
         
         for layer in self.layers:
