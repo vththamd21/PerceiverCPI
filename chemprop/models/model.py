@@ -19,6 +19,7 @@ class GINLayer(nn.Module):
             nn.BatchNorm1D(hidden_size),
             nn.ReLU(),
             nn.Linear(hidden_size, hidden_size)
+            nn.BatchNorm1D(hidden_size),
             nn.ReLU()
         )
         self.epsilon = nn.Parameter(torch.Tensor([epsilon]))
