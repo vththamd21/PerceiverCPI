@@ -12,7 +12,9 @@ from chemprop.nn_utils import index_select_ND, get_activation_function
 
 
 class MPNEncoder(nn.Module):
-    """An :class:`MPNEncoder` is a message passing neural network for encoding a molecule."""
+    """An :class:`MPNEncoder` is a message passing neural network for encoding a molecule.
+    Modified to use GIN (Graph Isomorphism Network) instead of D-MPNN.
+    """
 
     def __init__(self, args: TrainArgs, atom_fdim: int, bond_fdim: int):
         """
@@ -23,7 +25,6 @@ class MPNEncoder(nn.Module):
         super(MPNEncoder, self).__init__()
         self.atom_fdim = atom_fdim
         self.bond_fdim = bond_fdim
-        self.atom_messages = args.atom_messages
         self.hidden_size = args.hidden_size
         self.bias = args.bias
         self.depth = args.depth
@@ -43,19 +44,21 @@ class MPNEncoder(nn.Module):
         # Cached zeros
         self.cached_zero_vector = nn.Parameter(torch.zeros(self.hidden_size), requires_grad=False)
 
-        # Input
-        input_dim = self.atom_fdim if self.atom_messages else self.bond_fdim
-        self.W_i = nn.Linear(input_dim, self.hidden_size, bias=self.bias)
+        # GIN Implementations
+        # Input layer for atoms
+        self.W_i = nn.Linear(self.atom_fdim, self.hidden_size, bias=self.bias)
+        
+        # Input layer for bonds (to project bond features to hidden size for GINE summation)
+        self.W_b = nn.Linear(self.bond_fdim, self.hidden_size, bias=self.bias)
 
-        if self.atom_messages:
-            w_h_input_size = self.hidden_size + self.bond_fdim
-        else:
-            w_h_input_size = self.hidden_size
+        # Shared weight matrix (MLP) for GIN updates
+        # GIN update: MLP((1+eps)*h_v + sum(h_u + e_uv))
+        self.W_h = nn.Linear(self.hidden_size, self.hidden_size, bias=self.bias)
 
-        # Shared weight matrix across depths (default)
-        self.W_h = nn.Linear(w_h_input_size, self.hidden_size, bias=self.bias)
+        # Epsilon parameter for GIN, one per layer
+        self.eps = nn.Parameter(torch.zeros(self.depth))
 
-        self.W_o = nn.Linear(self.atom_fdim + self.hidden_size, self.hidden_size)
+        self.W_o = nn.Linear(self.hidden_size, self.hidden_size) # Output projection if needed (often identity in simple GIN but kept for consistency)
 
         # layer after concatenating the descriptors if args.atom_descriptors == descriptors
         if args.atom_descriptors == 'descriptor':
@@ -67,7 +70,7 @@ class MPNEncoder(nn.Module):
                 mol_graph: BatchMolGraph,
                 atom_descriptors_batch: List[np.ndarray] = None) -> torch.FloatTensor:
         """
-        Encodes a batch of molecular graphs.
+        Encodes a batch of molecular graphs using GIN.
 
         :param mol_graph: A :class:`~chemprop.features.featurization.BatchMolGraph` representing
                           a batch of molecular graphs.
@@ -78,47 +81,43 @@ class MPNEncoder(nn.Module):
             atom_descriptors_batch = [np.zeros([1, atom_descriptors_batch[0].shape[1]])] + atom_descriptors_batch   # padding the first with 0 to match the atom_hiddens
             atom_descriptors_batch = torch.from_numpy(np.concatenate(atom_descriptors_batch, axis=0)).float().to(self.device)
 
-        f_atoms, f_bonds, a2b, b2a, b2revb, a_scope, b_scope = mol_graph.get_components(atom_messages=self.atom_messages)
-        f_atoms, f_bonds, a2b, b2a, b2revb = f_atoms.to(self.device), f_bonds.to(self.device), a2b.to(self.device), b2a.to(self.device), b2revb.to(self.device)
+        # Get components. Note: We use atom_messages=False logic to get bond info, but we will use a2a for GIN.
+        f_atoms, f_bonds, a2b, b2a, b2revb, a_scope, b_scope = mol_graph.get_components(atom_messages=False)
+        f_atoms, f_bonds, a2b = f_atoms.to(self.device), f_bonds.to(self.device), a2b.to(self.device)
+        
+        # Explicitly get atom-to-atom neighbors for GIN
+        a2a = mol_graph.get_a2a().to(self.device)
 
-        if self.atom_messages:
-            a2a = mol_graph.get_a2a().to(self.device)
+        # Input projection
+        x = self.W_i(f_atoms)  # num_atoms x hidden_size
+        x = self.act_func(x)
+        
+        # Project bond features
+        bond_emb = self.W_b(f_bonds) # num_bonds x hidden_size
 
-        # Input
-        if self.atom_messages:
-            input = self.W_i(f_atoms)  # num_atoms x hidden_size
-        else:
-            input = self.W_i(f_bonds)  # num_bonds x hidden_size
-        message = self.act_func(input)  # num_bonds x hidden_size
+        # GIN Message Passing Loop
+        for depth in range(self.depth):
+            # Aggregation: sum(h_u + e_uv) for u in neighbors
+            
+            # 1. Gather neighbor atom features
+            nei_x = index_select_ND(x, a2a) # num_atoms x max_degree x hidden_size
+            
+            # 2. Gather incident bond features
+            nei_b = index_select_ND(bond_emb, a2b) # num_atoms x max_degree x hidden_size
+            
+            # 3. Sum aggregation (GINE style)
+            # Note: a2a and a2b should be aligned in Chemprop's BatchMolGraph
+            aggr_message = (nei_x + nei_b).sum(dim=1) # num_atoms x hidden_size
+            
+            # Update step: MLP( (1+eps)*x + aggregation )
+            x = (1 + self.eps[depth]) * x + aggr_message
+            x = self.W_h(x)
+            x = self.act_func(x)
+            x = self.dropout_layer(x)
 
-        # Message passing
-        for depth in range(self.depth - 1):
-            if self.undirected:
-                message = (message + message[b2revb]) / 2
-
-            if self.atom_messages:
-                nei_a_message = index_select_ND(message, a2a)  # num_atoms x max_num_bonds x hidden
-                nei_f_bonds = index_select_ND(f_bonds, a2b)  # num_atoms x max_num_bonds x bond_fdim
-                nei_message = torch.cat((nei_a_message, nei_f_bonds), dim=2)  # num_atoms x max_num_bonds x hidden + bond_fdim
-                message = nei_message.sum(dim=1)  # num_atoms x hidden + bond_fdim
-            else:
-                # m(a1 -> a2) = [sum_{a0 \in nei(a1)} m(a0 -> a1)] - m(a2 -> a1)
-                # message      a_message = sum(nei_a_message)      rev_message
-                nei_a_message = index_select_ND(message, a2b)  # num_atoms x max_num_bonds x hidden
-                a_message = nei_a_message.sum(dim=1)  # num_atoms x hidden
-                rev_message = message[b2revb]  # num_bonds x hidden
-                message = a_message[b2a] - rev_message  # num_bonds x hidden
-
-            message = self.W_h(message)
-            message = self.act_func(input + message)  # num_bonds x hidden_size
-            message = self.dropout_layer(message)  # num_bonds x hidden
-
-        a2x = a2a if self.atom_messages else a2b
-        nei_a_message = index_select_ND(message, a2x)  # num_atoms x max_num_bonds x hidden
-        a_message = nei_a_message.mean(dim=1)  # num_atoms x hidden
-        a_input = torch.cat([f_atoms, a_message], dim=1)  # num_atoms x (atom_fdim + hidden)
-        atom_hiddens = self.act_func(self.W_o(a_input))  # num_atoms x hidden
-        atom_hiddens = self.dropout_layer(atom_hiddens)  # num_atoms x hidden
+        # Output
+        # x is already the atom hidden state (num_atoms x hidden_size)
+        atom_hiddens = x
 
         # concatenate the atom descriptors
         if atom_descriptors_batch is not None:
