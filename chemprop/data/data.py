@@ -14,6 +14,14 @@ from chemprop.features import is_explicit_h, is_reaction
 from chemprop.rdkit import make_mol
 from rdkit.Chem import AllChem
 
+from transformers import AutoTokenizer
+
+# Khởi tạo Tokenizer toàn cục để không phải load lại nhiều lần
+# Lưu ý: Tên model phải khớp với cái bạn đã khai báo trong model.py
+ESM_CHECKPOINT = "facebook/esm2_t6_8M_UR50D"
+print(f"Loading ESM-2 Tokenizer from {ESM_CHECKPOINT}...")
+global_esm_tokenizer = AutoTokenizer.from_pretrained(ESM_CHECKPOINT)
+
 # Cache of graph featurizations
 CACHE_GRAPH = True
 SMILES_TO_GRAPH: Dict[str, MolGraph] = {}
@@ -86,6 +94,25 @@ class MoleculeDatapoint:
 
         self.smiles = smiles
         self.sequences = sequences
+        # Kiểm tra xem có chuỗi protein không
+        if self.sequences and len(self.sequences) > 0:
+            # Lấy chuỗi protein đầu tiên (giả sử input là cặp 1 thuốc - 1 protein)
+            prot_seq = self.sequences[0]
+            
+            # Tokenize bằng ESM Tokenizer
+            tokenized = GLOBAL_ESM_TOKENIZER(
+                prot_seq,
+                padding='max_length',
+                truncation=True,
+                max_length=ESM_MAX_LEN,
+                return_tensors='pt'
+            )
+            # Lưu lại tensor (squeeze để bỏ dimension batch=1 vì đây là 1 datapoint lẻ)
+            self.sequence_tensor = tokenized['input_ids'].squeeze(0)
+        else:
+            # Xử lý trường hợp không có sequence (tạo vector rỗng hoặc báo lỗi tùy bạn)
+            self.sequence_tensor = torch.zeros(ESM_MAX_LEN, dtype=torch.long)
+
         self.targets = targets
         self.row = row
         self.data_weight = data_weight
@@ -627,19 +654,20 @@ class MoleculeSampler(Sampler):
 
 
 def construct_molecule_batch(data: List[MoleculeDatapoint]) -> MoleculeDataset:
-    r"""
-    Constructs a :class:`MoleculeDataset` from a list of :class:`MoleculeDatapoint`\ s.
+    # 1. Tạo Dataset như cũ
+    dataset = MoleculeDataset(data)
+    dataset.batch_graph()  # Forces computation and cachin
+    # Lấy sequence_tensor từ từng datapoint trong danh sách data
+    # data ở đây là List[MoleculeDatapoint]
+    seq_tensors = [d.sequence_tensor for d in data]
+    
+    # Stack lại thành 1 tensor lớn: [Batch_Size, Max_Len]
+    batch_sequence_tensor = torch.stack(seq_tensors)
+    
+    # Gán tensor này vào object dataset để model có thể gọi tới
+    dataset.batch_sequence_tensor = batch_sequence_tensor
 
-    Additionally, precomputes the :class:`~chemprop.features.BatchMolGraph` for the constructed
-    :class:`MoleculeDataset`.
-
-    :param data: A list of :class:`MoleculeDatapoint`\ s.
-    :return: A :class:`MoleculeDataset` containing all the :class:`MoleculeDatapoint`\ s.
-    """
-    data = MoleculeDataset(data)
-    data.batch_graph()  # Forces computation and caching of the BatchMolGraph for the molecules
-
-    return data
+    return dataset
 
 
 class MoleculeDataLoader(DataLoader):
