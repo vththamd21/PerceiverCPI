@@ -4,20 +4,19 @@ from random import Random
 from typing import Dict, Iterator, List, Optional, Union, Tuple
 
 import numpy as np
-import torch  # <--- Quan trọng: Cần import torch
-from transformers import AutoTokenizer # <--- Quan trọng: Cần import transformers
+import torch
+from transformers import AutoTokenizer
 from torch.utils.data import DataLoader, Dataset, Sampler
-from rdkit import Chem
+from rdkit import Chem, DataStructs
+from rdkit.Chem import AllChem
 
 from .scaler import StandardScaler
 from chemprop.features import get_features_generator
 from chemprop.features import BatchMolGraph, MolGraph
 from chemprop.features import is_explicit_h, is_reaction
 from chemprop.rdkit import make_mol
-from rdkit.Chem import AllChem
 
 # --- [START] ESM CONFIGURATION ---
-# Khai báo Tokenizer toàn cục để tránh lỗi NameError
 ESM_MODEL_NAME = "facebook/esm2_t6_8M_UR50D"
 ESM_MAX_LEN = 1024
 
@@ -29,44 +28,31 @@ except Exception as e:
     GLOBAL_ESM_TOKENIZER = None
 # --- [END] ESM CONFIGURATION ---
 
-
 # Cache of graph featurizations
 CACHE_GRAPH = True
 SMILES_TO_GRAPH: Dict[str, MolGraph] = {}
 
-
 def cache_graph() -> bool:
-    r"""Returns whether :class:`~chemprop.features.MolGraph`\ s will be cached."""
     return CACHE_GRAPH
 
-
 def set_cache_graph(cache_graph: bool) -> None:
-    r"""Sets whether :class:`~chemprop.features.MolGraph`\ s will be cached."""
     global CACHE_GRAPH
     CACHE_GRAPH = cache_graph
 
-
 def empty_cache():
-    r"""Empties the cache of :class:`~chemprop.features.MolGraph` and RDKit molecules."""
     SMILES_TO_GRAPH.clear()
     SMILES_TO_MOL.clear()
-
 
 # Cache of RDKit molecules
 CACHE_MOL = True
 SMILES_TO_MOL: Dict[str, Union[Chem.Mol, Tuple[Chem.Mol, Chem.Mol]]] = {}
 
-
 def cache_mol() -> bool:
-    r"""Returns whether RDKit molecules will be cached."""
     return CACHE_MOL
 
-
 def set_cache_mol(cache_mol: bool) -> None:
-    r"""Sets whether RDKit molecules will be cached."""
     global CACHE_MOL
     CACHE_MOL = cache_mol
-
 
 class MoleculeDatapoint:
     """A :class:`MoleculeDatapoint` contains a single molecule and its associated features and targets."""
@@ -84,12 +70,7 @@ class MoleculeDatapoint:
                  bond_features: np.ndarray = None,
                  overwrite_default_atom_features: bool = False,
                  overwrite_default_bond_features: bool = False):
-        """
-        :param smiles: A list of the SMILES strings for the molecules.
-        :param sequences: A list of protein sequences.
-        :param targets: A list of targets for the molecule.
-        ...
-        """
+        
         if features is not None and features_generator is not None:
             raise ValueError('Cannot provide both loaded features and a features generator.')
 
@@ -108,14 +89,10 @@ class MoleculeDatapoint:
         self.is_reaction = is_reaction()
         self.is_explicit_h = is_explicit_h()
 
-        # --- [START] ESM TOKENIZATION LOGIC ---
-        # Xử lý Protein Sequence thành Tensor ngay khi khởi tạo Datapoint
+        # --- [START] ESM TOKENIZATION ---
         if self.sequences and len(self.sequences) > 0 and GLOBAL_ESM_TOKENIZER is not None:
             try:
-                # Lấy sequence đầu tiên (giả định 1 protein/datapoint)
                 prot_seq = self.sequences[0]
-                
-                # Tokenize
                 tokenized = GLOBAL_ESM_TOKENIZER(
                     prot_seq,
                     padding='max_length',
@@ -123,15 +100,13 @@ class MoleculeDatapoint:
                     max_length=ESM_MAX_LEN,
                     return_tensors='pt'
                 )
-                # Squeeze để bỏ dimension batch (1, seq_len) -> (seq_len)
                 self.sequence_tensor = tokenized['input_ids'].squeeze(0)
             except Exception as e:
                 print(f"Error tokenizing sequence: {e}")
                 self.sequence_tensor = torch.zeros(ESM_MAX_LEN, dtype=torch.long)
         else:
-            # Fallback nếu không có sequence hoặc tokenizer lỗi
             self.sequence_tensor = torch.zeros(ESM_MAX_LEN, dtype=torch.long)
-        # --- [END] ESM TOKENIZATION LOGIC ---
+        # --- [END] ESM TOKENIZATION ---
 
         # Generate additional features if given a generator
         if self.features_generator is not None:
@@ -151,12 +126,10 @@ class MoleculeDatapoint:
                             self.features.extend(np.zeros(len(features_generator(Chem.MolFromSmiles('C')))))   
             self.features = np.array(self.features)
 
-        # Fix nans in features
+        # Fix nans
         replace_token = 0
         if self.features is not None:
             self.features = np.where(np.isnan(self.features), replace_token, self.features)
-
-        # Fix nans in atom/bond descriptors
         if self.atom_descriptors is not None:
             self.atom_descriptors = np.where(np.isnan(self.atom_descriptors), replace_token, self.atom_descriptors)
         if self.atom_features is not None:
@@ -170,7 +143,6 @@ class MoleculeDatapoint:
 
     @property
     def mol(self) -> Union[List[Chem.Mol], List[Tuple[Chem.Mol, Chem.Mol]]]:
-        """Gets the corresponding list of RDKit molecules for the corresponding SMILES list."""
         mol = make_mols(self.smiles, self.is_reaction, self.is_explicit_h)
         if cache_mol():
             for s, m in zip(self.smiles, mol):
@@ -202,14 +174,6 @@ class MoleculeDatapoint:
     def set_targets(self, targets: List[Optional[float]]):
         self.targets = targets
 
-    def add_features(self) -> List[np.ndarray]:
-        if len(self._data) == 0 or self._data[0].features is None:
-            return None
-        # Note: Logic here seems customized in original file, keeping somewhat generic placeholder or original
-        # Original file logic for add_features inside MoleculeDatapoint seemed broken (referencing self._data which belongs to Dataset)
-        # Assuming standard getter for features:
-        return self.features
-
     def reset_features_and_targets(self) -> None:
         self.features, self.targets = self.raw_features, self.raw_targets
         self.atom_descriptors, self.atom_features, self.bond_features = \
@@ -224,8 +188,6 @@ class MoleculeDataset(Dataset):
         self._scaler = None
         self._batch_graph = None
         self._random = Random()
-        
-        # Placeholder for batch sequence tensor
         self.batch_sequence_tensor = None
 
     def smiles(self, flatten: bool = False) -> Union[List[str], List[List[str]]]:
@@ -243,12 +205,36 @@ class MoleculeDataset(Dataset):
             return [mol for d in self._data for mol in d.mol]
         return [d.mol for d in self._data]
 
+    # --- [START] PHỤC HỒI LOGIC SINH MORGAN FINGERPRINT ---
     def add_features(self) -> List[np.ndarray]:
-        # Original implementation seemed to use Morgan Fingerprint on the fly here
-        # We preserve the logic if it was intended to return the pre-calculated features
+        """
+        Tự động tính toán Morgan Fingerprint (2048 bit) nếu chưa có feature.
+        Đây là logic bắt buộc của model PerceiverCPI (nhánh fc_mg).
+        """
         if len(self._data) == 0:
             return None
-        return [d.features for d in self._data]
+
+        # Kiểm tra xem features đã có sẵn chưa (được nạp từ arguments)
+        if self._data[0].features is not None:
+             return [d.features for d in self._data]
+
+        # Nếu không, tính toán on-the-fly (theo code gốc của repo)
+        list_fingvecs = []
+        for d in self._data:
+            # d.mol là list các mol, lấy cái đầu tiên
+            mol = d.mol[0] 
+            if mol is None: 
+                # Trường hợp lỗi SMILES, tạo vector rỗng
+                features = np.zeros((2048,))
+            else:
+                features_vec = AllChem.GetMorganFingerprintAsBitVect(mol, radius=2, nBits=2048)
+                features = np.zeros((1,))
+                DataStructs.ConvertToNumpyArray(features_vec, features)
+            
+            list_fingvecs.append(features)
+
+        return list_fingvecs
+    # --- [END] ---
 
     @property
     def number_of_molecules(self) -> int:
@@ -375,8 +361,6 @@ class MoleculeDataset(Dataset):
 
 
 class MoleculeSampler(Sampler):
-    """A :class:`MoleculeSampler` samples data from a :class:`MoleculeDataset` for a :class:`MoleculeDataLoader`."""
-
     def __init__(self,
                  dataset: MoleculeDataset,
                  class_balance: bool = False,
@@ -415,22 +399,13 @@ class MoleculeSampler(Sampler):
 
 
 def construct_molecule_batch(data: List[MoleculeDatapoint]) -> MoleculeDataset:
-    r"""
-    Constructs a :class:`MoleculeDataset` from a list of :class:`MoleculeDatapoint`\ s.
-    Precomputes the BatchMolGraph and batches the ESM sequence tensors.
-    """
-    # 1. Tạo Dataset
     dataset = MoleculeDataset(data)
+    dataset.batch_graph()
     
-    # 2. Tạo Graph Batch
-    dataset.batch_graph() 
-
-    # 3. [NEW] Gom Sequence Tensor (ESM)
-    # Lấy sequence_tensor từ mỗi datapoint
+    # Gom Sequence Tensor (ESM)
     if hasattr(data[0], 'sequence_tensor'):
         seq_tensors = [d.sequence_tensor for d in data]
         try:
-            # Stack thành [Batch_Size, Max_Len]
             dataset.batch_sequence_tensor = torch.stack(seq_tensors)
         except Exception as e:
             print(f"Warning: Failed to stack sequence tensors: {e}")
@@ -442,8 +417,6 @@ def construct_molecule_batch(data: List[MoleculeDatapoint]) -> MoleculeDataset:
 
 
 class MoleculeDataLoader(DataLoader):
-    """A :class:`MoleculeDataLoader` is a PyTorch :class:`DataLoader` for loading a :class:`MoleculeDataset`."""
-
     def __init__(self,
                  dataset: MoleculeDataset,
                  batch_size: int = 50,
@@ -496,7 +469,6 @@ class MoleculeDataLoader(DataLoader):
 
     
 def make_mols(smiles: List[str], reaction: bool, keep_h: bool):
-    """Builds a list of RDKit molecules."""
     if reaction:
         mol = [SMILES_TO_MOL[s] if s in SMILES_TO_MOL else (make_mol(s.split(">")[0], keep_h), make_mol(s.split(">")[-1], keep_h)) for s in smiles]
     else:
