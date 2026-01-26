@@ -10,8 +10,8 @@ MAX_ATOMIC_NUM = 100
 ATOM_FEATURES = {
     'atomic_num': list(range(MAX_ATOMIC_NUM)),
     'degree': [0, 1, 2, 3, 4, 5],
-    'formal_charge': [-1, -2, 1, 2, 0],
-    'chiral_tag': [0, 1, 2, 3],
+    #'formal_charge': [-1, -2, 1, 2, 0],
+    #'chiral_tag': [0, 1, 2, 3],
     'num_Hs': [0, 1, 2, 3, 4],
     'hybridization': [
         Chem.rdchem.HybridizationType.SP,
@@ -152,8 +152,6 @@ def atom_features(atom: Chem.rdchem.Atom, functional_groups: List[int] = None) -
     else:
         features = onek_encoding_unk(atom.GetAtomicNum() - 1, ATOM_FEATURES['atomic_num']) + \
             onek_encoding_unk(atom.GetTotalDegree(), ATOM_FEATURES['degree']) + \
-            onek_encoding_unk(atom.GetFormalCharge(), ATOM_FEATURES['formal_charge']) + \
-            onek_encoding_unk(int(atom.GetChiralTag()), ATOM_FEATURES['chiral_tag']) + \
             onek_encoding_unk(int(atom.GetTotalNumHs()), ATOM_FEATURES['num_Hs']) + \
             onek_encoding_unk(int(atom.GetHybridization()), ATOM_FEATURES['hybridization']) + \
             [1 if atom.GetIsAromatic() else 0] + \
