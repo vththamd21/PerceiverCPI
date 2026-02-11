@@ -10,20 +10,15 @@ from chemprop.args import TrainArgs
 from chemprop.features import BatchMolGraph
 from chemprop.nn_utils import get_activation_function, initialize_weights
 from .CAB import CrossAttentionBlock as CAB
-
-
-
+from transformers import AutoModel, AutoTokenizer
 
 class InteractionModel(nn.Module):
-    """A :class:`InteractionNet` is a model which contains a D-MPNN and MPL and 1DCNN following by Cross attention Block"""
-
+    """A :class:`InteractionNet` is a model which contains a D-MPNN, MLP and ESM-2 Transformer following by Cross attention Block"""
 
     def __init__(self, args: TrainArgs, featurizer: bool = False):
         """
         :param args: A :class:`~chemprop.args.TrainArgs` object containing model arguments.
-        :param featurizer: Whether the model should act as a featurizer, i.e., outputting the
-                           learned features from the last layer prior to prediction rather than
-                           outputting the actual property predictions.
+        :param featurizer: Whether the model should act as a featurizer.
         """
         super(InteractionModel, self).__init__()
 
@@ -31,16 +26,14 @@ class InteractionModel(nn.Module):
         self.multiclass = args.dataset_type == 'multiclass'
         self.featurizer = featurizer
 
-        self.embedding_xt = nn.Embedding(args.vocab_size, args.prot_hidden)
-        self.conv_in = nn.Conv1d(in_channels=args.sequence_length, out_channels=args.prot_1d_out, kernel_size=1)
-        self.convs = nn.ModuleList([nn.Conv1d(args.prot_hidden, 2*args.prot_hidden, args.kernel_size, padding=args.kernel_size//2) for _ in range(args.prot_1dcnn_num)])   # convolutional layers
-        self.rnns = nn.ModuleList([nn.GRU(args.prot_1d_out,args.prot_1d_out, num_layers=1, bidirectional=True,  batch_first=True) for _ in range(args.prot_1dcnn_num)])
-        self.fc1_xt = nn.Linear(args.prot_hidden*args.prot_1d_out, args.hidden_size)
+        # --- CẤU HÌNH ESM-2 ---
+        # Sử dụng mô hình ESM-2 nhỏ (8M tham số) để chạy nhanh. 
+        # Nếu có GPU mạnh (A100/V100), bạn có thể đổi thành 'facebook/esm2_t33_650M_UR50D'
+        self.esm_model_name = 'facebook/esm2_t6_8M_UR50D' 
+        
+        # Các lớp xử lý Compound (Giữ nguyên)
         self.fc_mg = nn.Linear(2048, args.hidden_size)
-        self.fc_residual_connection = nn.Linear(args.prot_hidden,args.prot_1d_out)
-        self.scale = torch.sqrt(torch.FloatTensor([args.alpha])).cuda()
         self.relu = nn.ReLU()
-        self.norm = nn.LayerNorm(args.prot_1d_out)
         self.do = nn.Dropout(args.dropout)
 
         self.CAB = CAB(args)
@@ -58,30 +51,39 @@ class InteractionModel(nn.Module):
         self.create_encoder(args)
         self.create_ffn(args)
 
+        # Khởi tạo trọng số cho các lớp MPNN/MLP trước
         initialize_weights(self)
 
-    def create_encoder(self, args: TrainArgs) -> None:
-        """
-        Creates the message passing encoder for the model.
+        # --- KHỞI TẠO ESM-2 (Load Pre-trained) ---
+        # Load sau initialize_weights để tránh bị reset trọng số pre-trained
+        print(f"Loading Protein Language Model: {self.esm_model_name}...")
+        self.esm_tokenizer = AutoTokenizer.from_pretrained(self.esm_model_name)
+        self.esm_model = AutoModel.from_pretrained(self.esm_model_name)
 
-        :param args: A :class:`~chemprop.args.TrainArgs` object containing model arguments.
-        """
+        # ĐÓNG BĂNG (FREEZE) ESM-2
+        # Giúp train nhanh hơn và tránh lỗi OOM (Out of Memory)
+        for param in self.esm_model.parameters():
+            param.requires_grad = False
+        
+        # Lớp chiếu: Chuyển vector ESM (vd: 320 hoặc 1280) về hidden_size của model (vd: 128)
+        self.esm_hidden_dim = self.esm_model.config.hidden_size
+        self.fc_esm_project = nn.Linear(self.esm_hidden_dim, args.hidden_size)
+        self.esm_dropout = nn.Dropout(args.dropout)
+
+    def create_encoder(self, args: TrainArgs) -> None:
+        """Creates the message passing encoder for the model."""
         self.encoder = MPN(args)
               
         if args.checkpoint_frzn is not None:
-            if args.freeze_first_only: # Freeze only the first encoder
+            if args.freeze_first_only: 
                 for param in list(self.encoder.encoder.children())[0].parameters():
                     param.requires_grad=False
-            else: # Freeze all encoders
+            else: 
                 for param in self.encoder.parameters():
                     param.requires_grad=False                   
                         
     def create_ffn(self, args: TrainArgs) -> None:
-        """
-        Creates the feed-forward layers for the model.
-
-        :param args: A :class:`~chemprop.args.TrainArgs` object containing model arguments.
-        """
+        """Creates the feed-forward layers for the model."""
         self.multiclass = args.dataset_type == 'multiclass'
         if self.multiclass:
             self.num_classes = args.multiclass_num_classes
@@ -96,7 +98,6 @@ class InteractionModel(nn.Module):
         if args.atom_descriptors == 'descriptor':
             first_linear_dim += args.atom_descriptors_size
 
-        first_linear_dim = first_linear_dim
         dropout = nn.Dropout(args.dropout)
         activation = get_activation_function(args.activation)
 
@@ -123,129 +124,73 @@ class InteractionModel(nn.Module):
                 nn.Linear(args.ffn_hidden_size, self.output_size),
             ])
             
-
-        # Create FFN model
         self.ffn = nn.Sequential(*ffn)
         
         if args.checkpoint_frzn is not None:
             if args.frzn_ffn_layers >0:
-                for param in list(self.ffn.parameters())[0:2*args.frzn_ffn_layers]: # Freeze weights and bias for given number of layers
+                for param in list(self.ffn.parameters())[0:2*args.frzn_ffn_layers]:
                     param.requires_grad=False
 
+    def featurize(self, batch, features_batch=None, atom_descriptors_batch=None, atom_features_batch=None, bond_features_batch=None):
+        return self.ffn[:-1](self.encoder(batch, features_batch, atom_descriptors_batch, atom_features_batch, bond_features_batch))
 
-    def featurize(self,
-                  batch: Union[List[List[str]], List[List[Chem.Mol]], List[List[Tuple[Chem.Mol, Chem.Mol]]], List[BatchMolGraph]],
-                  features_batch: List[np.ndarray] = None,
-                  atom_descriptors_batch: List[np.ndarray] = None,
-                  atom_features_batch: List[np.ndarray] = None,
-                  bond_features_batch: List[np.ndarray] = None) -> torch.FloatTensor:
-        """
-        Computes feature vectors of the input by running the model except for the last layer.
-
-        :param batch: A list of list of SMILES, a list of list of RDKit molecules, or a
-                      list of :class:`~chemprop.features.featurization.BatchMolGraph`.
-                      The outer list or BatchMolGraph is of length :code:`num_molecules` (number of datapoints in batch),
-                      the inner list is of length :code:`number_of_molecules` (number of molecules per datapoint).
-        :param features_batch: A list of numpy arrays containing additional features.
-        :param atom_descriptors_batch: A list of numpy arrays containing additional atom descriptors.
-        :param atom_features_batch: A list of numpy arrays containing additional atom features.
-        :param bond_features_batch: A list of numpy arrays containing additional bond features.
-        :return: The feature vectors computed by the :class:`InteractionModel`.
-        """
-        return self.ffn[:-1](self.encoder(batch, features_batch, atom_descriptors_batch,
-                                          atom_features_batch, bond_features_batch))
-
-    def fingerprint(self,
-                  batch: Union[List[List[str]], List[List[Chem.Mol]], List[List[Tuple[Chem.Mol, Chem.Mol]]], List[BatchMolGraph]],
-                  features_batch: List[np.ndarray] = None,
-                  atom_descriptors_batch: List[np.ndarray] = None) -> torch.FloatTensor:
-        """
-        Encodes the fingerprint vectors of the input molecules by passing the inputs through the MPNN and returning
-        the latent representation before the FFNN.
-
-        :param batch: A list of list of SMILES, a list of list of RDKit molecules, or a
-                      list of :class:`~chemprop.features.featurization.BatchMolGraph`.
-                      The outer list or BatchMolGraph is of length :code:`num_molecules` (number of datapoints in batch),
-                      the inner list is of length :code:`number_of_molecules` (number of molecules per datapoint).
-        :param features_batch: A list of numpy arrays containing additional features.
-        :param atom_descriptors_batch: A list of numpy arrays containing additional atom descriptors.
-        :return: The fingerprint vectors calculated through the MPNN.
-        """
-        return self.encoder(batch, features_batch, atom_descriptors_batch)
-
-
-    def normalization(self,vector_present,threshold=0.1):
-        
+    def normalization(self, vector_present, threshold=0.1):
         vector_present_clone = vector_present.clone()
         num = vector_present_clone - vector_present_clone.min(1,keepdim = True)[0]
-        de = vector_present_clone.max(1,keepdim = True)[0] - vector_present_clone.min(1,keepdim = True)[0]
-
+        de = vector_present_clone.max(1,keepdim = True)[0] - vector_present_clone.min(1,keepdim = True)[0] + 1e-9
         return num / de
 
     def forward(self,
                 batch: Union[List[List[str]], List[List[Chem.Mol]], List[List[Tuple[Chem.Mol, Chem.Mol]]], List[BatchMolGraph]],
-                sequence_tensor: List[np.ndarray] = None,
+                sequence_inputs: dict, # Thay đổi: nhận dict từ tokenizer thay vì tensor
                 add_feature: List[np.ndarray] = None,
                 features_batch: List[np.ndarray] = None,
                 atom_descriptors_batch: List[np.ndarray] = None,
                 atom_features_batch: List[np.ndarray] = None,
                 bond_features_batch: List[np.ndarray] = None) -> torch.FloatTensor:
-        """
-        Runs the :class:`InteractionNet` on input.
-
-        :param batch: A list of list of SMILES, a list of list of RDKit molecules, or a
-                      list of :class:`~chemprop.features.featurization.BatchMolGraph`.
-                      The outer list or BatchMolGraph is of length :code:`num_molecules` (number of datapoints in batch),
-                      the inner list is of length :code:`number_of_molecules` (number of molecules per datapoint).
-        :sequence_tensor: A list of numpy arrays contraning Protein Encoding vectors
-        :add_feature: A list of numpy arrays containing additional features (Morgan' Fingerprint).
-        :param atom_descriptors_batch: A list of numpy arrays containing additional atom descriptors.
-        :param atom_features_batch: A list of numpy arrays containing additional atom features.
-        :param bond_features_batch: A list of numpy arrays containing additional bond features.
-        :return: The output of the :class:`InteractionNet`, which is either property predictions
-                 or molecule features if :code:`self.featurizer=True`.
-        """
+        
         if self.featurizer:
-            return self.featurize(batch, features_batch, atom_descriptors_batch,
-                                  atom_features_batch, bond_features_batch)
-        # 1D Graph feature
-        mpnn_out = self.normalization(self.encoder(batch, features_batch, atom_descriptors_batch,
-                                       atom_features_batch, bond_features_batch))
+            return self.featurize(batch, features_batch, atom_descriptors_batch, atom_features_batch, bond_features_batch)
+        
+        # 1. Trích xuất đặc trưng Graph (MPNN)
+        mpnn_out = self.normalization(self.encoder(batch, features_batch, atom_descriptors_batch, atom_features_batch, bond_features_batch))
 
-        #protein feature extraction
-        sequence = sequence_tensor.cuda()
-        embedded_xt = self.embedding_xt(sequence)
-        input_nn = self.conv_in(embedded_xt)
+        # 2. Trích xuất đặc trưng Protein (ESM-2)
+        # Lấy input_ids và attention_mask từ batch đã tokenize
+        input_ids = sequence_inputs['input_ids'].to(mpnn_out.device)
+        attention_mask = sequence_inputs['attention_mask'].to(mpnn_out.device)
 
-        conv_input = input_nn.permute(0, 2, 1)
+        # Chạy ESM-2 (không tính gradient cho backbone)
+        with torch.no_grad():
+            esm_output = self.esm_model(input_ids=input_ids, attention_mask=attention_mask)
+        
+        last_hidden_state = esm_output.last_hidden_state # (Batch, Seq_Len, ESM_Dim)
 
-        for i, conv in enumerate(self.convs):
+        # Mean Pooling: Tạo 1 vector đại diện cho cả chuỗi protein
+        input_mask_expanded = attention_mask.unsqueeze(-1).expand(last_hidden_state.size()).float()
+        sum_embeddings = torch.sum(last_hidden_state * input_mask_expanded, 1)
+        sum_mask = torch.clamp(input_mask_expanded.sum(1), min=1e-9)
+        protein_embedding = sum_embeddings / sum_mask # (Batch, ESM_Dim)
 
-            conved = self.norm(conv(conv_input))
+        # Chiếu và chuẩn hóa
+        protein_tensor = self.fc_esm_project(protein_embedding)
+        protein_tensor = self.esm_dropout(self.relu(protein_tensor))
+        protein_tensor = self.normalization(protein_tensor) # Chuẩn hóa MinMax như logic cũ
 
-            conved = F.glu(conved, dim=1)
-
-            conved = conved + self.scale*conv_input
-
-            conv_input = conved
-
-        out_conv = self.relu(conved)
-        # Flatten protein
-        protein_tensor = out_conv.view(out_conv.size(0),out_conv.size(1)*out_conv.size(2))
-        # 1D Protein feature
-        protein_tensor = self.do(self.relu(self.fc1_xt(self.normalization(protein_tensor))))
-        # 1D Morgan feature
+        # 3. Trích xuất đặc trưng Morgan Fingerprint
         add_feature = self.do(self.relu(self.fc_mg(add_feature.cuda())))
-        # Cross attention blocks
-        output = self.CAB(mpnn_out,add_feature,protein_tensor)
-        # Output
+
+        # 4. Cross Attention Blocks
+        output = self.CAB(mpnn_out, add_feature, protein_tensor)
+
+        # 5. Output Prediction
         output = self.ffn(output)
 
         if self.classification and not self.training:
             output = self.sigmoid(output)
         if self.multiclass:
-            output = output.reshape((output.size(0), -1, self.num_classes))  # batch size x num targets x num classes per target
+            output = output.reshape((output.size(0), -1, self.num_classes))
             if not self.training:
-                output = self.multiclass_softmax(output)  # to get probabilities during evaluation, but not during training as we're using CrossEntropyLoss
+                output = self.multiclass_softmax(output)
 
         return output
