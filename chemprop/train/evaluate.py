@@ -16,14 +16,6 @@ def evaluate_predictions(preds: List[List[float]],
                          logger: logging.Logger = None) -> Dict[str, List[float]]:
     """
     Evaluates predictions using a metric function after filtering out invalid targets.
-
-    :param preds: A list of lists of shape :code:`(data_size, num_tasks)` with model predictions.
-    :param targets: A list of lists of shape :code:`(data_size, num_tasks)` with targets.
-    :param num_tasks: Number of tasks.
-    :param metrics: A list of names of metric functions.
-    :param dataset_type: Dataset type.
-    :param logger: A logger to record output.
-    :return: A dictionary mapping each metric in :code:`metrics` to a list of values for each task.
     """
     info = logger.info if logger is not None else print
 
@@ -33,7 +25,6 @@ def evaluate_predictions(preds: List[List[float]],
         return {metric: [float('nan')] * num_tasks for metric in metrics}
 
     # Filter out empty targets
-    # valid_preds and valid_targets have shape (num_tasks, data_size)
     valid_preds = [[] for _ in range(num_tasks)]
     valid_targets = [[] for _ in range(num_tasks)]
     for i in range(num_tasks):
@@ -45,7 +36,6 @@ def evaluate_predictions(preds: List[List[float]],
     # Compute metric
     results = defaultdict(list)
     for i in range(num_tasks):
-        # # Skip if all targets or preds are identical, otherwise we'll crash during classification
         if dataset_type == 'classification':
             nan = False
             if all(target == 0 for target in valid_targets[i]) or all(target == 1 for target in valid_targets[i]):
@@ -80,28 +70,21 @@ def evaluate(model: InteractionModel,
              num_tasks: int,
              metrics: List[str],
              dataset_type: str,
-             args:TrainArgs,
+             args: TrainArgs,
              scaler: StandardScaler = None,
-             logger: logging.Logger = None, tokenizer = None) -> Dict[str, List[float]]:
+             logger: logging.Logger = None, 
+             tokenizer = None) -> Dict[str, List[float]]:
     """
     Evaluates an ensemble of models on a dataset by making predictions and then evaluating the predictions.
-
-    :param model: A :class:`~chemprop.models.model.InteractionModel`.
-    :param data_loader: A :class:`~chemprop.data.data.MoleculeDataLoader`.
-    :param num_tasks: Number of tasks.
-    :param metrics: A list of names of metric functions.
-    :param dataset_type: Dataset type.
-    :param scaler: A :class:`~chemprop.features.scaler.StandardScaler` object fit on the training targets.
-    :param logger: A logger to record output.
-    :return: A dictionary mapping each metric in :code:`metrics` to a list of values for each task.
-
     """
+    
+    # SỬA ĐỔI QUAN TRỌNG: 
+    # Loại bỏ tham số 'args' và 'tokenizer' khi gọi hàm predict().
+    # Hàm predict mới tự lấy tokenizer từ model và không cần args.
     preds = predict(
         model=model,
         data_loader=data_loader,
-        args = args,
-        scaler=scaler,
-        tokenizer = tokenizer
+        scaler=scaler
     )
 
     results = evaluate_predictions(
