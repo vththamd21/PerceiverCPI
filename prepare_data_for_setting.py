@@ -11,9 +11,9 @@ import numpy as np
 def new_compound():
     index = 0
     for i in range(5):
-        input_file = r'C:\Users\DMIS_Quang\Desktop\project\dataset\kiba_davis_deeppurpose\davis_data.csv'
-        train_file = r'C:\Users\DMIS_Quang\Desktop\project\dataset\kiba_davis_deeppurpose\%sdavis_train_newcomp.csv'%i
-        test_file = r'C:\Users\DMIS_Quang\Desktop\project\dataset\kiba_davis_deeppurpose\%sdavis_test_newcomp.csv'%i
+        input_file = r'dataset_ready_for_3d.csv'
+        train_file = r'toy_dataset/newcomp_3D/%sdavis_train_newcomp.csv'%i
+        test_file = r'toy_dataset/newcomp_3D/%sdavis_test_newcomp.csv'%i
         with open(input_file) as csv_file_a:
             with open(train_file, mode='w',newline='') as result1:
                 with open(test_file, mode='w',newline='') as result:
@@ -49,6 +49,8 @@ def new_compound():
                                     row_new[1] = row[1]
                                     row_new[2] = row[2]
                                     row_new[3] = row[3]
+                                    row_new[4] = row[4]
+                                    row_new[5] = row[5]
                                     result.writerow(row_new)
                         for smile in smiles:
                             if smile not in smiles_test:
@@ -60,15 +62,16 @@ def new_compound():
                                         row_new[1] = row[1]
                                         row_new[2] = row[2]
                                         row_new[3] = row[3]
-
+                                        row_new[4] = row[4]
+                                        row_new[5] = row[5]
                                         result1.writerow(row_new)
                         print('done!')
 def new_protein():
     index = 0
     for i in range(5):
-        input_file = r'/Users/vuhongtham/Desktop/workspace/PerceiverCPI/toy_dataset/davis (2).csv'
-        train_file = r'/Users/vuhongtham/Desktop/workspace/PerceiverCPI/toy_dataset/%sdavis_train_newprot.csv'%i
-        test_file = r'/Users/vuhongtham/Desktop/workspace/PerceiverCPI/toy_dataset/%sdavis_test_newprot.csv'%i
+        input_file = r'dataset_ready_for_3d.csv'
+        train_file = r'toy_dataset/newprot_3D/%sdavis_train_newprot.csv'%i
+        test_file = r'toy_dataset/newprot_3D/%sdavis_test_newprot.csv'%i
         
         with open(input_file) as csv_file_a:
             with open(train_file, mode='w',newline='') as result:
@@ -107,6 +110,8 @@ def new_protein():
                                 row_new[1] = row[1]
                                 row_new[2] = row[2]
                                 row_new[3] = row[3]
+                                row_new[4] = row[4]
+                                row_new[5] = row[5]
                                 result1.writerow(row_new)
                     prots_train = [prot for prot in headers_pro if prot not in prots_test]
                     for prot in prots_train:
@@ -118,7 +123,8 @@ def new_protein():
                                 row_new[1] = row[1]
                                 row_new[2] = row[2]
                                 row_new[3] = row[3]
-
+                                row_new[4] = row[4]
+                                row_new[5] = row[5]
                                 result.writerow(row_new)
                     print('done!')
 
@@ -126,9 +132,9 @@ def newcompound_newprotein():
     index_compound = 0
     index_protein = 0
     for i in range(5):
-        input_file = r'/Users/vuhongtham/Desktop/workspace/PerceiverCPI/toy_dataset/davis (2).csv'
-        train_file = r'/Users/vuhongtham/Desktop/workspace/PerceiverCPI/toy_dataset/%davis_train_newnew.csv'%i
-        test_file = r'/Users/vuhongtham/Desktop/workspace/PerceiverCPI/toy_dataset/%davis_test_newnew.csv'%i
+        input_file = r'dataset_ready_for_3d.csv'
+        train_file = r'toy_dataset/newpair_3D/%davis_train_newnew.csv'%i
+        test_file = r'toy_dataset/newpair_3D/%davis_test_newnew.csv'%i
         
         with open(input_file) as csv_file_a:
             with open(train_file, mode='w',newline='') as result:
@@ -176,7 +182,9 @@ def newcompound_newprotein():
                                 row_new[0] = row[0]
                                 row_new[1] = row[1]
                                 row_new[2] = row[2]
-                                # row_new[3] = row[3]
+                                row_new[3] = row[3]
+                                row_new[4] = row[4]
+                                row_new[5] = row[5]
                                 result1.writerow(row_new)
 
                     prots_train = [prot for prot in headers_pro if prot not in prots_test]
@@ -189,8 +197,9 @@ def newcompound_newprotein():
                                 row_new[0] = row[0]
                                 row_new[1] = row[1]
                                 row_new[2] = row[2]
-                                # row_new[3] = row[3]
-
+                                row_new[3] = row[3]
+                                row_new[4] = row[4]
+                                row_new[5] = row[5]
                                 result.writerow(row_new)
                     print('done!')
     return None
@@ -374,8 +383,8 @@ def newcompound_newproteingpcr():
 
 if __name__ == '__main__':
     
-    new_protein()
-    # new_compound()
+    #new_protein()
+    #new_compound()
     newcompound_newprotein()
     # make_val_set()
     # check_data()

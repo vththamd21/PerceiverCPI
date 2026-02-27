@@ -1,10 +1,9 @@
-from collections import defaultdict
 import logging
 from typing import Dict, List
 
-from .predict import predict
 from chemprop.data import MoleculeDataLoader, StandardScaler
 from chemprop.models import InteractionModel
+from chemprop.train.predict import predict
 from chemprop.utils import get_metric_func
 from chemprop.args import TrainArgs
 
@@ -15,16 +14,14 @@ def evaluate_predictions(preds: List[List[float]],
                          dataset_type: str,
                          logger: logging.Logger = None) -> Dict[str, List[float]]:
     """
-    Evaluates predictions using a metric function after filtering out invalid targets.
+    Evaluates predictions using a metric function and filtering out invalid targets.
     """
     info = logger.info if logger is not None else print
-
     metric_to_func = {metric: get_metric_func(metric) for metric in metrics}
 
     if len(preds) == 0:
         return {metric: [float('nan')] * num_tasks for metric in metrics}
 
-    # Filter out empty targets
     valid_preds = [[] for _ in range(num_tasks)]
     valid_targets = [[] for _ in range(num_tasks)]
     for i in range(num_tasks):
@@ -33,54 +30,44 @@ def evaluate_predictions(preds: List[List[float]],
                 valid_preds[i].append(preds[j][i])
                 valid_targets[i].append(targets[j][i])
 
-    # Compute metric
-    results = defaultdict(list)
-    for i in range(num_tasks):
-        if dataset_type == 'classification':
-            nan = False
-            if all(target == 0 for target in valid_targets[i]) or all(target == 1 for target in valid_targets[i]):
-                nan = True
-                info('Warning: Found a task with targets all 0s or all 1s')
-            if all(pred == 0 for pred in valid_preds[i]) or all(pred == 1 for pred in valid_preds[i]):
-                nan = True
-                info('Warning: Found a task with predictions all 0s or all 1s')
+    results = {}
+    for metric, metric_func in metric_to_func.items():
+        results[metric] = []
+        for i in range(num_tasks):
+            if dataset_type == 'classification':
+                nan = False
+                if all(target == 0 for target in valid_targets[i]) or all(target == 1 for target in valid_targets[i]):
+                    nan = True
+                    info('Warning: Found a task with targets all 0s or all 1s')
+                if all(pred == 0 for pred in valid_preds[i]) or all(pred == 1 for pred in valid_preds[i]):
+                    nan = True
+                    info('Warning: Found a task with predictions all 0s or all 1s')
 
-            if nan:
-                for metric in metrics:
+                if nan:
                     results[metric].append(float('nan'))
+                    continue
+
+            if len(valid_targets[i]) == 0:
                 continue
 
-        if len(valid_targets[i]) == 0:
-            continue
-
-        for metric, metric_func in metric_to_func.items():
-            if dataset_type == 'multiclass' and metric == 'cross_entropy':
-                results[metric].append(metric_func(valid_targets[i], valid_preds[i],
-                                                   labels=list(range(len(valid_preds[i][0])))))
+            if dataset_type == 'multiclass':
+                results[metric].append(metric_func(valid_targets[i], valid_preds[i], labels=list(range(len(valid_preds[i][0])))))
             else:
                 results[metric].append(metric_func(valid_targets[i], valid_preds[i]))
 
-    results = dict(results)
-
     return results
-
 
 def evaluate(model: InteractionModel,
              data_loader: MoleculeDataLoader,
              num_tasks: int,
              metrics: List[str],
              dataset_type: str,
-             args: TrainArgs,
+             args: TrainArgs = None,
              scaler: StandardScaler = None,
-             logger: logging.Logger = None, 
-             tokenizer = None) -> Dict[str, List[float]]:
+             logger: logging.Logger = None) -> Dict[str, List[float]]:
     """
-    Evaluates an ensemble of models on a dataset by making predictions and then evaluating the predictions.
+    Evaluates an ensemble of models on a dataset.
     """
-    
-    # SỬA ĐỔI QUAN TRỌNG: 
-    # Loại bỏ tham số 'args' và 'tokenizer' khi gọi hàm predict().
-    # Hàm predict mới tự lấy tokenizer từ model và không cần args.
     preds = predict(
         model=model,
         data_loader=data_loader,
