@@ -5,12 +5,12 @@ import numpy as np
 
 from .data import MoleculeDatapoint, MoleculeDataset
 from .scaffold import scaffold_split
-from chemprop.args import TrainArgs
+#from chemprop.args import TrainArgs
 from chemprop.features import load_features
 
 def get_data(path: str,
              skip_invalid_smiles: bool = True,
-             args: TrainArgs = None,
+             args = None,  # <--- Đã xóa : TrainArgs
              features_path: List[str] = None,
              max_data_size: int = None,
              use_compound_names: bool = None) -> MoleculeDataset:
@@ -74,7 +74,7 @@ def split_data(data: MoleculeDataset,
                split_type: str = 'random',
                sizes: Tuple[float, float, float] = (0.8, 0.1, 0.1),
                seed: int = 0,
-               args: TrainArgs = None,
+               args = None,  # <--- Đã xóa : TrainArgs
                logger: Logger = None) -> Tuple[MoleculeDataset, MoleculeDataset, MoleculeDataset]:
     """
     Splits data into train, validation, and test splits.

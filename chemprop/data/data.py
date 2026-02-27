@@ -5,13 +5,13 @@ import numpy as np
 from torch.utils.data.dataset import Dataset
 from rdkit import Chem
 
-from chemprop.args import TrainArgs
+#from chemprop.args import TrainArgs
 from chemprop.features import get_features_generator, get_atom_descriptors_generator
 from chemprop.features import get_smiles_from_name
 from chemprop.features.pdb_features import get_calpha_distance_matrix
 
 class MoleculeDatapoint:
-    def __init__(self, line: List[str], args: TrainArgs = None, features: np.ndarray = None, use_compound_names: bool = False, pdb_path_index: int = None):
+    def __init__(self, line: List[str], args = None, features: np.ndarray = None, use_compound_names: bool = False, pdb_path_index: int = None):
         if args is not None:
             self.features_generator = args.features_generator
             self.atom_descriptors_generator = args.atom_descriptors_generator
