@@ -124,3 +124,15 @@ class MoleculeDataset(Dataset):
     def __getitem__(self, item) -> Union[MoleculeDatapoint, List[MoleculeDatapoint]]:
         return self.data[item]
     
+CACHE_GRAPH = False
+
+def set_cache_graph(set_cache: bool) -> None:
+    global CACHE_GRAPH
+    CACHE_GRAPH = set_cache
+
+def empty_cache() -> None:
+    pass
+
+def cache_graph() -> bool:
+    global CACHE_GRAPH
+    return CACHE_GRAPH
