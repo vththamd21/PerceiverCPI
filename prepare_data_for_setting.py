@@ -263,9 +263,9 @@ def check_data():
         plt.plot(x_axis, norm.pdf(x_axis, mean, sd),label = 'Data')
         plt.show()
 def check_dup():
-    data_path1 = r'C:\Users\DMIS_Quang\Desktop\project\dataset\kiba_davis_deeppurpose\5_folds_check\crossdomain\sparsity_metz_davis\davis_data.csv'
-    data_path2 = r'C:\Users\DMIS_Quang\Desktop\project\dataset\kiba_davis_deeppurpose\5_folds_check\crossdomain\sparsity_metz_davis\metz_data.csv'
-    output = r'C:\Users\DMIS_Quang\Desktop\project\dataset\kiba_davis_deeppurpose\5_folds_check\crossdomain\sparsity_metz_davis\metz_data_test.csv'
+    data_path1 = r'toy_dataset/davis.csv'
+    data_path2 = r'toy_dataset/pdbbind_data.csv'
+    output = r'toy_dataset/cross_domain/pdb_data_test.csv'
     df_davis = pd.read_csv(data_path1)
     df_pdb = pd.read_csv(data_path2)
     # print(len(list(set(df_davis['smiles']))))
@@ -381,13 +381,118 @@ def newcompound_newproteingpcr():
                                 result.writerow(row_new)
                     print('done!')
 
+def check_dup_fixed():
+    data_path1 = r'toy_dataset/davis.csv'
+    data_path2 = r'toy_dataset/pdbbind_data.csv'
+    output = r'toy_dataset/cross_domain/pdb_data_test.csv'
+    
+    # 1. Đọc dữ liệu
+    df_davis = pd.read_csv(data_path1)
+    df_pdb = pd.read_csv(data_path2)
+    
+    # Lưu ý: Tìm đúng tên cột chứa protein sequence trong các file
+    # (Tuỳ thuộc vào script tạo file trước đó, cột này có thể tên là 'sequence', 'sequences', hoặc 'Target_seq')
+    seq_col_pdb = 'sequences' if 'sequences' in df_pdb.columns else 'sequence'
+    seq_col_davis = 'Target_seq' if 'Target_seq' in df_davis.columns else 'sequence'
+    
+    # 2. Lấy danh sách protein của Davis (tập train)
+    davis_seqs = set(df_davis[seq_col_davis].dropna())
+    
+    # 3. Tạo tập Test từ PDBBind bằng cách giữ lại các protein KHÔNG NẰM TRONG Davis
+    df_pdb_test = df_pdb[~df_pdb[seq_col_pdb].isin(davis_seqs)]
+    
+    # Mở rộng (Tùy chọn): Nếu bạn muốn lọc luôn cả các hợp chất (SMILES) bị trùng:
+    smiles_col_davis = 'smiles' if 'smiles' in df_davis.columns else df_davis.columns[1] # Thường cột smiles ở vị trí index 1
+    davis_smiles = set(df_davis[smiles_col_davis].dropna())
+    df_pdb_test = df_pdb_test[~df_pdb_test['smiles'].isin(davis_smiles)]
+    
+    # 4. Lưu ra file kết quả
+    df_pdb_test.to_csv(output, index=False)
+    print(f"Hoàn tất! Tập test mới có {len(df_pdb_test)} dòng (Lọc từ {len(df_pdb)} dòng gốc).")
+
+#check_dup_fixed()
+# def make_davis_cross_domain_split():
+#     # Điều chỉnh lại đường dẫn này cho khớp với thư mục chứa dữ liệu trên máy của bạn
+#     # Ví dụ định dạng đường dẫn: '/Users/username/Desktop/project/dataset/davis.csv'
+#     data_path = r'toy_dataset/davis.csv'
+#     train_output = r'toy_dataset/cross_domain/davis_train.csv'
+#     val_output = r'toy_dataset/cross_domain/davis_val.csv'
+
+#     print(f"Đang đọc dữ liệu từ {data_path}...")
+#     try:
+#         df = pd.read_csv(data_path)
+#     except FileNotFoundError:
+#         print("Không tìm thấy file. Vui lòng kiểm tra lại đường dẫn!")
+#         return
+
+#     # Xáo trộn ngẫu nhiên dữ liệu
+#     df_shuffled = df.sample(frac=1, random_state=42).reset_index(drop=True)
+
+#     # Cắt 20% cho tập validation
+#     val_size = int(len(df_shuffled) * 0.2)
+#     df_val = df_shuffled[:val_size]
+#     df_train = df_shuffled[val_size:]
+
+#     # Lưu ra file CSV
+#     df_train.to_csv(train_output, index=False)
+#     df_val.to_csv(val_output, index=False)
+    
+#     print(f"Hoàn tất chia tập Davis!")
+#     print(f"- Tập Train: {len(df_train)} dòng -> {train_output}")
+#     print(f"- Tập Validation: {len(df_val)} dòng -> {val_output}")
+import pandas as pd
+
+def make_davis_cross_domain_split():
+    # Điều chỉnh lại đường dẫn
+    data_path = r'toy_dataset/davis.csv'
+    train_output = r'toy_dataset/cross_domain/davis_train.csv'
+    val_output = r'toy_dataset/cross_domain/davis_val.csv'
+
+    print(f"Đang đọc dữ liệu từ {data_path}...")
+    df = pd.read_csv(data_path)
+
+    # 1. KHAI BÁO TÊN CỘT GỐC TRONG FILE DAVIS CỦA BẠN
+    # (Hãy thay đổi các chuỗi này nếu file gốc của bạn có tên cột khác, 
+    # ví dụ: 'SMILES', 'Target_seq', 'y')
+    col_smiles = 'smiles'     
+    col_sequence = 'sequence' 
+    col_label = 'label'       
+
+    # 2. Đổi tên cột về chuẩn (nếu tên gốc đã chuẩn thì bước này không ảnh hưởng)
+    df = df.rename(columns={
+        col_smiles: 'smiles',
+        col_sequence: 'sequence',
+        col_label: 'label'
+    })
+
+    # 3. CHỈ GIỮ LẠI ĐÚNG 3 CỘT CẦN THIẾT
+    df = df[['smiles', 'sequence', 'label']]
+
+    # 4. Xáo trộn ngẫu nhiên dữ liệu
+    df_shuffled = df.sample(frac=1, random_state=42).reset_index(drop=True)
+
+    # 5. Cắt 20% cho tập validation
+    val_size = int(len(df_shuffled) * 0.2)
+    df_val = df_shuffled[:val_size]
+    df_train = df_shuffled[val_size:]
+
+    # 6. Lưu ra file CSV
+    df_train.to_csv(train_output, index=False)
+    df_val.to_csv(val_output, index=False)
+    
+    print(f"Hoàn tất chia tập Davis!")
+    print(f"- Tập Train: {len(df_train)} dòng (chỉ gồm 3 cột) -> {train_output}")
+    print(f"- Tập Validation: {len(df_val)} dòng (chỉ gồm 3 cột) -> {val_output}")
+
 if __name__ == '__main__':
     
     #new_protein()
     #new_compound()
-    newcompound_newprotein()
+    #newcompound_newprotein()
     # make_val_set()
     # check_data()
-    # check_dup()
+    #check_dup()
     # newcompound_newproteingpcr()
     # make_val_set()
+    #check_dup_fixed()
+    make_davis_cross_domain_split()
