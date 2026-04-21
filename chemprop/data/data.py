@@ -778,5 +778,5 @@ class GraphDataset(PyGDataset):
         # Gán thêm Morgan Fingerprint (nếu có)
         if datapoint.features is not None:
             pyg_data.additional_features = torch.tensor(datapoint.features, dtype=torch.float).view(1, -1)
-            
+        pyg_data.idx = torch.tensor([idx], dtype=torch.long)
         return pyg_data

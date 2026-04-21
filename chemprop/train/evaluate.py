@@ -75,42 +75,99 @@ def evaluate_predictions(preds: List[List[float]],
     return results
 
 
+# def evaluate(model: InteractionModel,
+#              data_loader: MoleculeDataLoader,
+#              num_tasks: int,
+#              metrics: List[str],
+#              dataset_type: str,
+#              args:TrainArgs,
+#              scaler: StandardScaler = None,
+#              logger: logging.Logger = None, tokenizer = None) -> Dict[str, List[float]]:
+#     """
+#     Evaluates an ensemble of models on a dataset by making predictions and then evaluating the predictions.
+
+#     :param model: A :class:`~chemprop.models.model.InteractionModel`.
+#     :param data_loader: A :class:`~chemprop.data.data.MoleculeDataLoader`.
+#     :param num_tasks: Number of tasks.
+#     :param metrics: A list of names of metric functions.
+#     :param dataset_type: Dataset type.
+#     :param scaler: A :class:`~chemprop.features.scaler.StandardScaler` object fit on the training targets.
+#     :param logger: A logger to record output.
+#     :return: A dictionary mapping each metric in :code:`metrics` to a list of values for each task.
+
+#     """
+#     preds = predict(
+#         model=model,
+#         data_loader=data_loader,
+#         args = args,
+#         scaler=scaler,
+#         tokenizer = tokenizer
+#     )
+
+#     results = evaluate_predictions(
+#         preds=preds,
+#         targets=data_loader.targets,
+#         num_tasks=num_tasks,
+#         metrics=metrics,
+#         dataset_type=dataset_type,
+#         logger=logger
+#     )
+
+#     return results
+
 def evaluate(model: InteractionModel,
              data_loader: MoleculeDataLoader,
              num_tasks: int,
              metrics: List[str],
              dataset_type: str,
-             args:TrainArgs,
+             args: TrainArgs,
              scaler: StandardScaler = None,
-             logger: logging.Logger = None, tokenizer = None) -> Dict[str, List[float]]:
+             logger: logging.Logger = None,
+             tokenizer = None) -> Dict[str, List[float]]:
     """
-    Evaluates an ensemble of models on a dataset by making predictions and then evaluating the predictions.
-
-    :param model: A :class:`~chemprop.models.model.InteractionModel`.
-    :param data_loader: A :class:`~chemprop.data.data.MoleculeDataLoader`.
-    :param num_tasks: Number of tasks.
-    :param metrics: A list of names of metric functions.
-    :param dataset_type: Dataset type.
-    :param scaler: A :class:`~chemprop.features.scaler.StandardScaler` object fit on the training targets.
-    :param logger: A logger to record output.
-    :return: A dictionary mapping each metric in :code:`metrics` to a list of values for each task.
-
+    Evaluates an ensemble of models on a dataset.
     """
-    preds = predict(
-        model=model,
-        data_loader=data_loader,
-        args = args,
-        scaler=scaler,
-        tokenizer = tokenizer
-    )
+    model.eval()
+    preds = []
 
-    results = evaluate_predictions(
+    with torch.no_grad():
+        for batch in tqdm(data_loader, total=len(data_loader), leave=False):
+            # --- BRIDGE TRICK CHO GRAPHSAGE ---
+            indices = batch.idx.tolist()
+            original_data = data_loader.dataset.molecule_dataset._data
+            chemprop_batch = MoleculeDataset([original_data[i] for i in indices])
+
+            mol_batch = batch.to(args.device) # Đối tượng đồ thị PyG
+            features_batch, protein_sequence_batch, atom_descriptors_batch, atom_features_batch, bond_features_batch, add_feature = \
+                chemprop_batch.features(), chemprop_batch.sequences(), chemprop_batch.atom_descriptors(), \
+                chemprop_batch.atom_features(), chemprop_batch.bond_features(), chemprop_batch.add_features()
+            # ----------------------------------
+
+            dummy_array = [0]*args.sequence_length
+            sequence_2_ar = [list(tokenizer.encode(list(t[0]))) + dummy_array for t in protein_sequence_batch]
+            new_ar = []
+            for arr in sequence_2_ar:
+                while len(arr) > args.sequence_length:
+                    arr.pop(len(arr)-1)
+                new_ar.append(np.zeros(args.sequence_length) + np.array(arr))
+            
+            sequence_tensor = torch.LongTensor(new_ar)
+            add_feature = torch.Tensor(add_feature)
+
+            batch_preds = model(mol_batch, sequence_tensor, add_feature, features_batch, 
+                                atom_descriptors_batch, atom_features_batch, bond_features_batch)
+            
+            batch_preds = batch_preds.data.cpu().numpy()
+            if scaler is not None:
+                batch_preds = scaler.inverse_transform(batch_preds)
+
+            preds.extend(batch_preds.tolist())
+
+    return evaluate_predictions(
         preds=preds,
-        targets=data_loader.targets,
+        targets=chemprop_batch.targets(), # Đảm bảo lấy targets đúng từ dữ liệu gốc
         num_tasks=num_tasks,
         metrics=metrics,
         dataset_type=dataset_type,
         logger=logger
     )
-
-    return results
