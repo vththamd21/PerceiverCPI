@@ -1,7 +1,8 @@
 from typing import List
-
-import torch
 from tqdm import tqdm
+import torch
+import numpy as np
+from chemprop.data import MoleculeDataset
 
 from chemprop.data import MoleculeDataLoader, MoleculeDataset, StandardScaler
 from chemprop.models import InteractionModel
