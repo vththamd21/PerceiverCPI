@@ -560,26 +560,26 @@ class MoleculeDataset(Dataset):
         """
         return len(self._data)
 
-    # def __getitem__(self, item) -> Union[MoleculeDatapoint, List[MoleculeDatapoint]]:
-    #     r"""
-    #     Gets one or more :class:`MoleculeDatapoint`\ s via an index or slice.
+    def __getitem__(self, item) -> Union[MoleculeDatapoint, List[MoleculeDatapoint]]:
+        r"""
+        Gets one or more :class:`MoleculeDatapoint`\ s via an index or slice.
 
-    #     :param item: An index (int) or a slice object.
-    #     :return: A :class:`MoleculeDatapoint` if an int is provided or a list of :class:`MoleculeDatapoint`\ s
-    #              if a slice is provided.
-    #     """
-    #     return self._data[item]
-    def __getitem__(self, item):
-        datapoint = self._data[item]
-        smiles = datapoint.smiles
-        pyg_data = smiles_to_pyg_data(smiles)
-        if datapoint.targets is not None:
-            pyg_data.y = torch.tensor(datapoint.targets, dtype=torch.float).view(1, -1)
+        :param item: An index (int) or a slice object.
+        :return: A :class:`MoleculeDatapoint` if an int is provided or a list of :class:`MoleculeDatapoint`\ s
+                 if a slice is provided.
+        """
+        return self._data[item]
+    # def __getitem__(self, item):
+    #     datapoint = self._data[item]
+    #     smiles = datapoint.smiles
+    #     pyg_data = smiles_to_pyg_data(smiles)
+    #     if datapoint.targets is not None:
+    #         pyg_data.y = torch.tensor(datapoint.targets, dtype=torch.float).view(1, -1)
     
-        if hasattr(datapoint, 'sequence_tensor'):
-            pyg_data.sequence_tensor = torch.tensor(datapoint.sequence_tensor, dtype=torch.long)
+    #     if hasattr(datapoint, 'sequence_tensor'):
+    #         pyg_data.sequence_tensor = torch.tensor(datapoint.sequence_tensor, dtype=torch.long)
 
-        return pyg_data
+    #     return pyg_data
 
 class MoleculeSampler(Sampler):
     """A :class:`MoleculeSampler` samples data from a :class:`MoleculeDataset` for a :class:`MoleculeDataLoader`."""
@@ -741,3 +741,42 @@ def make_mols(smiles: List[str], reaction: bool, keep_h: bool):
     else:
         mol = [SMILES_TO_MOL[s] if s in SMILES_TO_MOL else make_mol(s, keep_h) for s in smiles]
     return mol
+from torch_geometric.data import Dataset as PyGDataset
+from chemprop.features.featurization import smiles_to_pyg_data
+import torch
+
+class GraphDataset(PyGDataset):
+    """
+    Lớp bao bọc (Wrapper) để chuyển đổi MoleculeDataset của Chemprop 
+    sang định dạng Dataset của PyTorch Geometric.
+    """
+    def __init__(self, molecule_dataset):
+        super().__init__()
+        self.molecule_dataset = molecule_dataset
+        
+    def len(self):
+        return len(self.molecule_dataset)
+        
+    def get(self, idx):
+        # Lấy datapoint gốc
+        datapoint = self.molecule_dataset._data[idx]
+        
+        # SỬA LỖI TYPEERROR: Lấy phần tử đầu tiên nếu smiles là một list
+        smiles = datapoint.smiles[0] if isinstance(datapoint.smiles, list) else datapoint.smiles
+        
+        # Tạo đồ thị từ chuỗi SMILES
+        pyg_data = smiles_to_pyg_data(smiles)
+        
+        # Gán nhãn (targets)
+        if datapoint.targets is not None:
+            pyg_data.y = torch.tensor(datapoint.targets, dtype=torch.float).view(1, -1)
+            
+        # Gán chuỗi Protein sequence (nếu mô hình sử dụng)
+        if hasattr(datapoint, 'sequence_tensor') and datapoint.sequence_tensor is not None:
+            pyg_data.sequence_tensor = torch.tensor(datapoint.sequence_tensor, dtype=torch.long)
+            
+        # Gán thêm Morgan Fingerprint (nếu có)
+        if datapoint.features is not None:
+            pyg_data.additional_features = torch.tensor(datapoint.features, dtype=torch.float).view(1, -1)
+            
+        return pyg_data

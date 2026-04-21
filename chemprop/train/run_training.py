@@ -22,6 +22,7 @@ from chemprop.utils import build_optimizer, build_lr_scheduler, get_loss_func, l
     save_checkpoint, save_smiles_splits, load_frzn_model
 from .lamb import Lamb
 from lifelines.utils import concordance_index
+from chemprop.data.data import GraphDataset
 from torch_geometric.loader import DataLoader as PyGDataLoader
 def run_training(args: TrainArgs,
                  data: MoleculeDataset,
@@ -163,9 +164,9 @@ def run_training(args: TrainArgs,
         num_workers = args.num_workers
 
     # Create data loaders
-    
+    train_graph_dataset = GraphDataset(train_data)
     train_data_loader = PyGDataLoader(
-        train_data,
+        train_graph_dataset,
         batch_size=args.batch_size,
         num_workers=num_workers,
         #class_balance=args.class_balance,
@@ -173,14 +174,16 @@ def run_training(args: TrainArgs,
         # seed=args.seed
 
     )
+    val_graph_dataset = GraphDataset(val_data)
     val_data_loader = PyGDataLoader(
-        val_data,
+        val_graph_dataset,
         batch_size=args.batch_size,
         num_workers=num_workers,
         shuffle=False
     )
+    test_graph_dataset = GraphDataset(test_data)
     test_data_loader = PyGDataLoader(
-        test_data,
+        test_graph_dataset,
         batch_size=args.batch_size,
         num_workers=num_workers,
         shuffle=False
