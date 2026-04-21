@@ -3,7 +3,7 @@ from tqdm import tqdm
 import torch
 import numpy as np
 from chemprop.data import MoleculeDataset
-
+from tqdm import tqdm
 from chemprop.data import MoleculeDataLoader, MoleculeDataset, StandardScaler
 from chemprop.models import InteractionModel
 import numpy as np
