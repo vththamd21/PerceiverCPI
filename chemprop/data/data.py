@@ -569,26 +569,17 @@ class MoleculeDataset(Dataset):
     #              if a slice is provided.
     #     """
     #     return self._data[item]
-    def __getitem__(self, item) -> Union[MoleculeDatapoint, Data]:
-        """
-        Trả về một đối tượng Data của PyTorch Geometric thay vì chỉ là Datapoint thô.
-        """
+    def __getitem__(self, item):
         datapoint = self._data[item]
         smiles = datapoint.smiles
-        
-        # Gọi hàm chuyển đổi đã viết ở bước trước
         pyg_data = smiles_to_pyg_data(smiles)
-        
-        # Gán nhãn (targets) vào đối tượng đồ thị để DataLoader của PyG có thể xử lý
         if datapoint.targets is not None:
-            pyg_data.y = torch.tensor([datapoint.targets], dtype=torch.float)
-        
-        # Nếu có thêm các features khác (như Morgan fingerprint)
-        if datapoint.features is not None:
-            pyg_data.additional_features = torch.tensor([datapoint.features], dtype=torch.float)
+            pyg_data.y = torch.tensor(datapoint.targets, dtype=torch.float).view(1, -1)
+    
+        if hasattr(datapoint, 'sequence_tensor'):
+            pyg_data.sequence_tensor = torch.tensor(datapoint.sequence_tensor, dtype=torch.long)
 
         return pyg_data
-
 
 class MoleculeSampler(Sampler):
     """A :class:`MoleculeSampler` samples data from a :class:`MoleculeDataset` for a :class:`MoleculeDataLoader`."""
