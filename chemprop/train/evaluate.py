@@ -4,7 +4,7 @@ from chemprop.data import MoleculeDataset
 from collections import defaultdict
 import logging
 from typing import Dict, List
-
+from tqdm import tqdm
 from .predict import predict
 from chemprop.data import MoleculeDataLoader, StandardScaler
 from chemprop.models import InteractionModel
