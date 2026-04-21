@@ -22,6 +22,7 @@ from chemprop.utils import build_optimizer, build_lr_scheduler, get_loss_func, l
     save_checkpoint, save_smiles_splits, load_frzn_model
 from .lamb import Lamb
 from lifelines.utils import concordance_index
+from torch_geometric.loader import DataLoader as PyGDataLoader
 def run_training(args: TrainArgs,
                  data: MoleculeDataset,
                  logger: Logger = None,
@@ -163,27 +164,30 @@ def run_training(args: TrainArgs,
 
     # Create data loaders
     
-    train_data_loader = MoleculeDataLoader(
-        dataset=train_data,
+    train_data_loader = PyGDataLoader(
+        train_data,
         batch_size=args.batch_size,
         num_workers=num_workers,
-        class_balance=args.class_balance,
-        shuffle=True,
-        seed=args.seed
+        #class_balance=args.class_balance,
+        shuffle=True
+        # seed=args.seed
+
     )
-    val_data_loader = MoleculeDataLoader(
-        dataset=val_data,
+    val_data_loader = PyGDataLoader(
+        val_data,
         batch_size=args.batch_size,
         num_workers=num_workers
+        shuffle=False
     )
-    test_data_loader = MoleculeDataLoader(
-        dataset=test_data,
+    test_data_loader = PyGDataLoader(
+        test_data,
         batch_size=args.batch_size,
         num_workers=num_workers
+        shuffle=False
     )
 
     if args.class_balance:
-        debug(f'With class_balance, effective train size = {train_data_loader.iter_size:,}')
+        debug('Note: PyGDataLoader is used, custom class_balance sampler might be ignored unless explicitly implemented.')
 
     # Train ensemble of models
     for model_idx in range(args.ensemble_size):
