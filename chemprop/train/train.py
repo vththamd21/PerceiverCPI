@@ -179,16 +179,20 @@ def train(model: InteractionModel,
         # FIX CỰC KỲ QUAN TRỌNG: CHUYỂN TẤT CẢ INPUT CỦA MODEL LÊN GPU
         # -------------------------------------------------------------------
         sequence_tensor = torch.LongTensor(new_ar).to(device)
-        
-        if features_batch is not None and features_batch[0] is not None:
-            features_tensor = torch.Tensor(features_batch).to(device)
+        if add_feature is not None:
+            # Chuyển thành list/numpy array hợp lệ trước khi biến thành Tensor
+            add_feature_tensor = torch.Tensor(add_feature).to(device)
         else:
-            features_tensor = None
+            add_feature_tensor = None
+        # if features_batch is not None and features_batch[0] is not None:
+        #     features_tensor = torch.Tensor(features_batch).to(device)
+        # else:
+        #     features_tensor = None
             
         # Nếu model() thực sự cần add_feature, hãy bỏ comment dòng dưới và thêm vào model()
         # add_feature_tensor = torch.Tensor(add_feature).to(device)
         
-        preds = model(mol_batch, sequence_tensor, features_tensor)
+        preds = model(mol_batch, sequence_tensor, add_feature_tensor)
         # -------------------------------------------------------------------
 
         # Move targets/masks to correct device (Bạn đã làm đúng phần này)
