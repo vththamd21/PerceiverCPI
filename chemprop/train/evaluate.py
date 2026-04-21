@@ -132,6 +132,7 @@ def evaluate(model: InteractionModel,
     """
     model.eval()
     preds = []
+    all_targets = [] # Thêm mảng này để lưu toàn bộ nhãn
 
     with torch.no_grad():
         for batch in tqdm(data_loader, total=len(data_loader), leave=False):
@@ -140,7 +141,7 @@ def evaluate(model: InteractionModel,
             original_data = data_loader.dataset.molecule_dataset._data
             chemprop_batch = MoleculeDataset([original_data[i] for i in indices])
 
-            mol_batch = batch.to(args.device) # Đối tượng đồ thị PyG
+            mol_batch = batch.to(args.device)
             features_batch, protein_sequence_batch, atom_descriptors_batch, atom_features_batch, bond_features_batch, add_feature = \
                 chemprop_batch.features(), chemprop_batch.sequences(), chemprop_batch.atom_descriptors(), \
                 chemprop_batch.atom_features(), chemprop_batch.bond_features(), chemprop_batch.add_features()
@@ -164,13 +165,24 @@ def evaluate(model: InteractionModel,
             if scaler is not None:
                 batch_preds = scaler.inverse_transform(batch_preds)
 
+            # Cộng dồn dự đoán và nhãn
             preds.extend(batch_preds.tolist())
+            all_targets.extend(chemprop_batch.targets()) # <--- SỬA LỖI Ở ĐÂY
 
     return evaluate_predictions(
         preds=preds,
-        targets=chemprop_batch.targets(), # Đảm bảo lấy targets đúng từ dữ liệu gốc
+        targets=all_targets, # <--- TRUYỀN TOÀN BỘ NHÃN VÀO ĐÂY
         num_tasks=num_tasks,
         metrics=metrics,
         dataset_type=dataset_type,
         logger=logger
+    )
+
+    # return evaluate_predictions(
+    #     preds=preds,
+    #     targets=chemprop_batch.targets(), # Đảm bảo lấy targets đúng từ dữ liệu gốc
+    #     num_tasks=num_tasks,
+    #     metrics=metrics,
+    #     dataset_type=dataset_type,
+    #     logger=logger
     )
