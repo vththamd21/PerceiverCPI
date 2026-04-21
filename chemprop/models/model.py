@@ -182,13 +182,25 @@ class InteractionModel(nn.Module):
 
         return num / de
     def forward(self,
-            molecule_batch,  # Bây giờ là PyG Batch object
-            sequence_tensor: torch.Tensor = None,
-            add_feature: torch.Tensor = None,
-            **kwargs) -> torch.FloatTensor:
+                molecule_batch,
+                sequence_tensor = None,
+                add_feature = None,
+                features_batch = None,
+                atom_descriptors_batch = None,
+                atom_features_batch = None,
+                bond_features_batch = None) -> torch.FloatTensor:
+        """
+        Đã cập nhật signature để nhận đủ các tham số từ DataLoader cũ,
+        dù một số tham số (như bond_features) không còn dùng cho GraphSAGE.
+        """
         if self.featurizer:
             return self.ffn[:-1](self.encoder(molecule_batch))
+
+        # 1. Trích xuất đặc trưng phân tử bằng GraphSAGE
+        # encoder giờ chỉ nhận molecule_batch (đối tượng PyG)
         mpnn_out = self.normalization(self.encoder(molecule_batch))
+
+        # 2. Trích xuất đặc trưng protein (logic CNN cũ)
         sequence = sequence_tensor.cuda()
         embedded_xt = self.embedding_xt(sequence)
         input_nn = self.conv_in(embedded_xt)
@@ -199,16 +211,27 @@ class InteractionModel(nn.Module):
             conved = torch.nn.functional.glu(conved, dim=1)
             conved = conved + self.scale * conv_input
             conv_input = conved
+
         out_conv = self.relu(conved)
         protein_tensor = out_conv.view(out_conv.size(0), -1)
         protein_tensor = self.do(self.relu(self.fc1_xt(self.normalization(protein_tensor))))
+
+        # 3. Đặc trưng Morgan (add_feature)
         add_feature = self.do(self.relu(self.fc_mg(add_feature.cuda())))
+
         # 4. Cross Attention và FFN
         output = self.CAB(mpnn_out, add_feature, protein_tensor)
         output = self.ffn(output)
 
+        # Trả về kết quả tùy theo bài toán
         if self.classification and not self.training:
             output = torch.sigmoid(output)
+            
+        if self.multiclass:
+            output = output.reshape((output.size(0), -1, self.num_classes))
+            if not self.training:
+                output = self.multiclass_softmax(output)
+
         return output
 
     # def forward(self,
