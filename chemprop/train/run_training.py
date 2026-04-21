@@ -176,13 +176,13 @@ def run_training(args: TrainArgs,
     val_data_loader = PyGDataLoader(
         val_data,
         batch_size=args.batch_size,
-        num_workers=num_workers
+        num_workers=num_workers,
         shuffle=False
     )
     test_data_loader = PyGDataLoader(
         test_data,
         batch_size=args.batch_size,
-        num_workers=num_workers
+        num_workers=num_workers,
         shuffle=False
     )
 
