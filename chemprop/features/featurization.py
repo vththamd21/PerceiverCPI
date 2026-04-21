@@ -4,6 +4,9 @@ from rdkit import Chem
 import torch
 import numpy as np
 from chemprop.rdkit import make_mol
+from torch_geometric.data import Data
+from rdkit import Chem
+import torch
 
 # Atom feature sizes
 MAX_ATOMIC_NUM = 100
@@ -37,6 +40,24 @@ REACTION_MODE = None
 EXPLICIT_H = False
 REACTION = False
 
+def smiles_to_pyg_data(smiles: str):
+    mol = Chem.MolFromSmiles(smiles)
+    if mol is None: 
+        return None
+
+    # 1. Trích xuất Node Features sử dụng hàm atom_features có sẵn của project
+    node_f = [atom_features(atom) for atom in mol.GetAtoms()]
+    x = torch.tensor(node_f, dtype=torch.float)
+
+    # 2. Trích xuất Edge Index (GraphSAGE dùng đồ thị vô hướng)
+    edge_indices = []
+    for bond in mol.GetBonds():
+        i, j = bond.GetBeginAtomIdx(), bond.GetEndAtomIdx()
+        edge_indices += [[i, j], [j, i]]
+    
+    edge_index = torch.tensor(edge_indices, dtype=torch.long).t().contiguous()
+    
+    return Data(x=x, edge_index=edge_index) 
 
 def get_atom_fdim(overwrite_default_atom: bool = False) -> int:
     """

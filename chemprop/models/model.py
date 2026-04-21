@@ -181,71 +181,100 @@ class InteractionModel(nn.Module):
         de = vector_present_clone.max(1,keepdim = True)[0] - vector_present_clone.min(1,keepdim = True)[0]
 
         return num / de
-
     def forward(self,
-                batch: Union[List[List[str]], List[List[Chem.Mol]], List[List[Tuple[Chem.Mol, Chem.Mol]]], List[BatchMolGraph]],
-                sequence_tensor: List[np.ndarray] = None,
-                add_feature: List[np.ndarray] = None,
-                features_batch: List[np.ndarray] = None,
-                atom_descriptors_batch: List[np.ndarray] = None,
-                atom_features_batch: List[np.ndarray] = None,
-                bond_features_batch: List[np.ndarray] = None) -> torch.FloatTensor:
-        """
-        Runs the :class:`InteractionNet` on input.
-
-        :param batch: A list of list of SMILES, a list of list of RDKit molecules, or a
-                      list of :class:`~chemprop.features.featurization.BatchMolGraph`.
-                      The outer list or BatchMolGraph is of length :code:`num_molecules` (number of datapoints in batch),
-                      the inner list is of length :code:`number_of_molecules` (number of molecules per datapoint).
-        :sequence_tensor: A list of numpy arrays contraning Protein Encoding vectors
-        :add_feature: A list of numpy arrays containing additional features (Morgan' Fingerprint).
-        :param atom_descriptors_batch: A list of numpy arrays containing additional atom descriptors.
-        :param atom_features_batch: A list of numpy arrays containing additional atom features.
-        :param bond_features_batch: A list of numpy arrays containing additional bond features.
-        :return: The output of the :class:`InteractionNet`, which is either property predictions
-                 or molecule features if :code:`self.featurizer=True`.
-        """
+            molecule_batch,  # Bây giờ là PyG Batch object
+            sequence_tensor: torch.Tensor = None,
+            add_feature: torch.Tensor = None,
+            **kwargs) -> torch.FloatTensor:
         if self.featurizer:
-            return self.featurize(batch, features_batch, atom_descriptors_batch,
-                                  atom_features_batch, bond_features_batch)
-        # 1D Graph feature
-        mpnn_out = self.normalization(self.encoder(batch, features_batch, atom_descriptors_batch,
-                                       atom_features_batch, bond_features_batch))
-
-        #protein feature extraction
+            return self.ffn[:-1](self.encoder(molecule_batch))
+        mpnn_out = self.normalization(self.encoder(molecule_batch))
         sequence = sequence_tensor.cuda()
         embedded_xt = self.embedding_xt(sequence)
         input_nn = self.conv_in(embedded_xt)
-
         conv_input = input_nn.permute(0, 2, 1)
 
-        for i, conv in enumerate(self.convs):
-
+        for conv in self.convs:
             conved = self.norm(conv(conv_input))
-
-            conved = F.glu(conved, dim=1)
-
-            conved = conved + self.scale*conv_input
-
+            conved = torch.nn.functional.glu(conved, dim=1)
+            conved = conved + self.scale * conv_input
             conv_input = conved
-
         out_conv = self.relu(conved)
-        # Flatten protein
-        protein_tensor = out_conv.view(out_conv.size(0),out_conv.size(1)*out_conv.size(2))
-        # 1D Protein feature
+        protein_tensor = out_conv.view(out_conv.size(0), -1)
         protein_tensor = self.do(self.relu(self.fc1_xt(self.normalization(protein_tensor))))
-        # 1D Morgan feature
         add_feature = self.do(self.relu(self.fc_mg(add_feature.cuda())))
-        # Cross attention blocks
-        output = self.CAB(mpnn_out,add_feature,protein_tensor)
-        # Output
+        # 4. Cross Attention và FFN
+        output = self.CAB(mpnn_out, add_feature, protein_tensor)
         output = self.ffn(output)
 
         if self.classification and not self.training:
-            output = self.sigmoid(output)
-        if self.multiclass:
-            output = output.reshape((output.size(0), -1, self.num_classes))  # batch size x num targets x num classes per target
-            if not self.training:
-                output = self.multiclass_softmax(output)  # to get probabilities during evaluation, but not during training as we're using CrossEntropyLoss
-
+            output = torch.sigmoid(output)
         return output
+
+    # def forward(self,
+    #             batch: Union[List[List[str]], List[List[Chem.Mol]], List[List[Tuple[Chem.Mol, Chem.Mol]]], List[BatchMolGraph]],
+    #             sequence_tensor: List[np.ndarray] = None,
+    #             add_feature: List[np.ndarray] = None,
+    #             features_batch: List[np.ndarray] = None,
+    #             atom_descriptors_batch: List[np.ndarray] = None,
+    #             atom_features_batch: List[np.ndarray] = None,
+    #             bond_features_batch: List[np.ndarray] = None) -> torch.FloatTensor:
+    #     """
+    #     Runs the :class:`InteractionNet` on input.
+
+    #     :param batch: A list of list of SMILES, a list of list of RDKit molecules, or a
+    #                   list of :class:`~chemprop.features.featurization.BatchMolGraph`.
+    #                   The outer list or BatchMolGraph is of length :code:`num_molecules` (number of datapoints in batch),
+    #                   the inner list is of length :code:`number_of_molecules` (number of molecules per datapoint).
+    #     :sequence_tensor: A list of numpy arrays contraning Protein Encoding vectors
+    #     :add_feature: A list of numpy arrays containing additional features (Morgan' Fingerprint).
+    #     :param atom_descriptors_batch: A list of numpy arrays containing additional atom descriptors.
+    #     :param atom_features_batch: A list of numpy arrays containing additional atom features.
+    #     :param bond_features_batch: A list of numpy arrays containing additional bond features.
+    #     :return: The output of the :class:`InteractionNet`, which is either property predictions
+    #              or molecule features if :code:`self.featurizer=True`.
+    #     """
+    #     if self.featurizer:
+    #         return self.featurize(batch, features_batch, atom_descriptors_batch,
+    #                               atom_features_batch, bond_features_batch)
+    #     # 1D Graph feature
+    #     mpnn_out = self.normalization(self.encoder(batch, features_batch, atom_descriptors_batch,
+    #                                    atom_features_batch, bond_features_batch))
+
+    #     #protein feature extraction
+    #     sequence = sequence_tensor.cuda()
+    #     embedded_xt = self.embedding_xt(sequence)
+    #     input_nn = self.conv_in(embedded_xt)
+
+    #     conv_input = input_nn.permute(0, 2, 1)
+
+    #     for i, conv in enumerate(self.convs):
+
+    #         conved = self.norm(conv(conv_input))
+
+    #         conved = F.glu(conved, dim=1)
+
+    #         conved = conved + self.scale*conv_input
+
+    #         conv_input = conved
+
+    #     out_conv = self.relu(conved)
+    #     # Flatten protein
+    #     protein_tensor = out_conv.view(out_conv.size(0),out_conv.size(1)*out_conv.size(2))
+    #     # 1D Protein feature
+    #     protein_tensor = self.do(self.relu(self.fc1_xt(self.normalization(protein_tensor))))
+    #     # 1D Morgan feature
+    #     add_feature = self.do(self.relu(self.fc_mg(add_feature.cuda())))
+    #     # Cross attention blocks
+    #     output = self.CAB(mpnn_out,add_feature,protein_tensor)
+    #     # Output
+    #     output = self.ffn(output)
+
+    #     if self.classification and not self.training:
+    #         output = self.sigmoid(output)
+    #     if self.multiclass:
+    #         output = output.reshape((output.size(0), -1, self.num_classes))  # batch size x num targets x num classes per target
+    #         if not self.training:
+    #             output = self.multiclass_softmax(output)  # to get probabilities during evaluation, but not during training as we're using CrossEntropyLoss
+
+    #     return output

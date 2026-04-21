@@ -13,7 +13,9 @@ from chemprop.features import BatchMolGraph, MolGraph
 from chemprop.features import is_explicit_h, is_reaction
 from chemprop.rdkit import make_mol
 from rdkit.Chem import AllChem
-
+import torch
+from torch_geometric.data import Data
+from chemprop.features.featurization import smiles_to_pyg_data
 # Cache of graph featurizations
 CACHE_GRAPH = True
 SMILES_TO_GRAPH: Dict[str, MolGraph] = {}
@@ -558,15 +560,34 @@ class MoleculeDataset(Dataset):
         """
         return len(self._data)
 
-    def __getitem__(self, item) -> Union[MoleculeDatapoint, List[MoleculeDatapoint]]:
-        r"""
-        Gets one or more :class:`MoleculeDatapoint`\ s via an index or slice.
+    # def __getitem__(self, item) -> Union[MoleculeDatapoint, List[MoleculeDatapoint]]:
+    #     r"""
+    #     Gets one or more :class:`MoleculeDatapoint`\ s via an index or slice.
 
-        :param item: An index (int) or a slice object.
-        :return: A :class:`MoleculeDatapoint` if an int is provided or a list of :class:`MoleculeDatapoint`\ s
-                 if a slice is provided.
+    #     :param item: An index (int) or a slice object.
+    #     :return: A :class:`MoleculeDatapoint` if an int is provided or a list of :class:`MoleculeDatapoint`\ s
+    #              if a slice is provided.
+    #     """
+    #     return self._data[item]
+    def __getitem__(self, item) -> Union[MoleculeDatapoint, Data]:
         """
-        return self._data[item]
+        Trả về một đối tượng Data của PyTorch Geometric thay vì chỉ là Datapoint thô.
+        """
+        datapoint = self._data[item]
+        smiles = datapoint.smiles
+        
+        # Gọi hàm chuyển đổi đã viết ở bước trước
+        pyg_data = smiles_to_pyg_data(smiles)
+        
+        # Gán nhãn (targets) vào đối tượng đồ thị để DataLoader của PyG có thể xử lý
+        if datapoint.targets is not None:
+            pyg_data.y = torch.tensor([datapoint.targets], dtype=torch.float)
+        
+        # Nếu có thêm các features khác (như Morgan fingerprint)
+        if datapoint.features is not None:
+            pyg_data.additional_features = torch.tensor([datapoint.features], dtype=torch.float)
+
+        return pyg_data
 
 
 class MoleculeSampler(Sampler):
